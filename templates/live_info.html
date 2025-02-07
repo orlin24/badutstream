@@ -1,0 +1,339 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container mt-4">
+    <!-- Header Section -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="text-primary">
+            <i class="bi bi-broadcast me-2"></i>Detail Live Streaming
+        </h1>
+        <a href="/live_list" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left me-2"></i>Kembali ke Daftar
+        </a>
+    </div>
+
+    <!-- Main Card -->
+    <div class="card border-dark shadow-lg">
+        <div class="card-header bg-dark text-white py-3">
+            <h4 class="mb-0">
+                <i class="bi bi-info-circle me-2"></i>Informasi Stream
+            </h4>
+        </div>
+        
+        <div class="card-body bg-secondary bg-opacity-10">
+            <!-- Dynamic Content Container -->
+            <div id="liveContainer">
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Memuat...</span>
+                    </div>
+                    <p class="text-muted mt-3">Memuat informasi stream...</p>
+                </div>
+            </div>
+
+            <!-- Response Messages -->
+            <div id="response" class="mt-4"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // =====================
+    // INITIALIZATION
+    // =====================
+    document.addEventListener('DOMContentLoaded', () => {
+        const liveId = getLiveIdFromURL();
+        
+        if (!liveId) {
+            showNotFoundMessage();
+            return;
+        }
+
+        initializeLiveInfo(liveId);
+    });
+
+    // =====================
+    // CORE FUNCTIONS
+    // =====================
+    function initializeLiveInfo(liveId) {
+        loadLiveInfo(liveId);
+        const statusInterval = setInterval(() => updateLiveStatus(liveId), 5000);
+        
+        // Cleanup interval on page leave
+        window.addEventListener('beforeunload', () => {
+            clearInterval(statusInterval);
+        });
+    }
+
+    async function loadLiveInfo(liveId) {
+        try {
+            const response = await fetch(`/get_live_info/${liveId}`);
+            const data = await response.json();
+            
+            if (!response.ok) throw new Error(data.message || 'Gagal memuat data');
+            renderLiveInfo(data);
+        } catch (error) {
+            showErrorMessage(error.message);
+        }
+    }
+
+    // =====================
+    // RENDER FUNCTIONS
+    // =====================
+    function renderLiveInfo(data) {
+        const template = `
+            <div class="row g-4">
+                <!-- Metadata Section -->
+                <div class="col-md-6">
+                    <div class="p-3 bg-dark rounded">
+                        <h5 class="text-primary mb-3">
+                            <i class="bi bi-card-text me-2"></i>Metadata Stream
+                        </h5>
+                        <dl class="row text-light">
+                            <dt class="col-sm-4">Judul</dt>
+                            <dd class="col-sm-8">${data.title}</dd>
+
+                            <dt class="col-sm-4">ID Stream</dt>
+                            <dd class="col-sm-8">${data.id}</dd>
+
+                            <dt class="col-sm-4">Video Source</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge bg-info">${data.video}</span>
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+
+                <!-- Status Section -->
+                <div class="col-md-6">
+                    <div class="p-3 bg-dark rounded">
+                        <h5 class="text-primary mb-3">
+                            <i class="bi bi-activity me-2"></i>Status Stream
+                        </h5>
+                        <div class="row text-light">
+                            <div class="col-6">
+                                <p class="mb-1">Status:</p>
+                                <span id="statusBadge" class="badge ${getStatusStyle(data.status)}">
+                                    ${data.status}
+                                </span>
+                            </div>
+                            <div class="col-6">
+                                <p class="mb-1">Mulai:</p>
+                                <span class="text-warning">${data.startTime}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stream Key -->
+                <div class="col-12">
+                    <div class="p-3 bg-dark rounded">
+                        <h5 class="text-primary mb-3">
+                            <i class="bi bi-shield-lock me-2"></i>Stream Key
+                        </h5>
+                        <div class="input-group">
+                            <input 
+                                type="text" 
+                                class="form-control bg-black text-success" 
+                                value="${data.streamKey}" 
+                                readonly
+                            >
+                            <button 
+                                class="btn btn-outline-success" 
+                                type="button"
+                                onclick="copyToClipboard('${data.streamKey}')"
+                            >
+                                <i class="bi bi-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="col-12 mt-4">
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <button 
+                            class="btn btn-danger px-4" 
+                            onclick="handleStopStream('${data.id}')"
+                        >
+                            <i class="bi bi-stop-circle me-2"></i>Stop Stream
+                        </button>
+                        <button 
+                            class="btn btn-primary px-4" 
+                            onclick="handleRestartStream('${data.id}')"
+                        >
+                            <i class="bi bi-arrow-repeat me-2"></i>Restart
+                        </button>
+                        <button 
+                            class="btn btn-warning px-4" 
+                            onclick="handleDeleteStream('${data.id}')"
+                        >
+                            <i class="bi bi-trash3 me-2"></i>Hapus
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('liveContainer').innerHTML = template;
+    }
+
+    // =====================
+    // UTILITY FUNCTIONS
+    // =====================
+    function getLiveIdFromURL() {
+        return window.location.pathname.split('/').pop() || null;
+    }
+
+    function getStatusStyle(status) {
+        const statusStyles = {
+            'Active': 'bg-success bg-opacity-25 text-success',
+            'Stopped': 'bg-danger bg-opacity-25 text-danger',
+            'Scheduled': 'bg-warning bg-opacity-25 text-warning'
+        };
+        return statusStyles[status] || 'bg-secondary';
+    }
+
+    async function updateLiveStatus(liveId) {
+        try {
+            const response = await fetch(`/get_live_info/${liveId}`);
+            const data = await response.json();
+            
+            const statusBadge = document.getElementById('statusBadge');
+            if (statusBadge) {
+                statusBadge.className = `badge ${getStatusStyle(data.status)}`;
+                statusBadge.textContent = data.status;
+            }
+        } catch (error) {
+            console.error('Error updating status:', error);
+        }
+    }
+
+    // =====================
+    // ACTION HANDLERS
+    // =====================
+    async function handleStopStream(liveId) {
+        if (!confirm('Apakah Anda yakin ingin menghentikan stream ini?')) return;
+        
+        try {
+            const response = await fetch(`/stop_stream/${liveId}`, { method: 'POST' });
+            const data = await response.json();
+            showAlert(`Status: ${data.message}`, 'danger');
+        } catch (error) {
+            showAlert(`Error: ${error.message}`, 'danger');
+        }
+    }
+
+    async function handleRestartStream(liveId) {
+        try {
+            const response = await fetch(`/restart_stream/${liveId}`, { method: 'POST' });
+            const data = await response.json();
+            showAlert(`Status: ${data.message}`, 'success');
+        } catch (error) {
+            showAlert(`Error: ${error.message}`, 'danger');
+        }
+    }
+
+    async function handleDeleteStream(liveId) {
+        if (!confirm('Hapus stream secara permanen?')) return;
+        
+        try {
+            const response = await fetch(`/delete_stream/${liveId}`, { method: 'POST' });
+            const data = await response.json();
+            showAlert(data.message, 'warning');
+            setTimeout(() => window.location.href = '/live_list', 1500);
+        } catch (error) {
+            showAlert(`Error: ${error.message}`, 'danger');
+        }
+    }
+
+    // =====================
+    // UI HELPERS
+    // =====================
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text)
+            .then(() => showAlert('Stream key berhasil disalin!', 'success'))
+            .catch(() => showAlert('Gagal menyalin ke clipboard', 'danger'));
+    }
+
+    function showAlert(message, type) {
+        const alertBox = document.createElement('div');
+        alertBox.className = `alert alert-${type} alert-dismissible fade show alert-bright`;
+        alertBox.innerHTML = `
+            <i class="bi ${getAlertIcon(type)} me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.getElementById('response').appendChild(alertBox);
+    }
+
+    function getAlertIcon(type) {
+        const icons = {
+            'success': 'bi-check-circle',
+            'danger': 'bi-exclamation-octagon',
+            'warning': 'bi-exclamation-triangle',
+            'info': 'bi-info-circle'
+        };
+        return icons[type] || 'bi-info-circle';
+    }
+
+    function showNotFoundMessage() {
+        document.getElementById('liveContainer').innerHTML = `
+            <div class="text-center py-5">
+                <i class="bi bi-broadcast-slash display-1 text-danger"></i>
+                <h3 class="mt-3 text-muted">Stream tidak ditemukan</h3>
+                <p class="text-secondary">Silakan pilih stream yang valid dari daftar</p>
+                <a href="/live_list" class="btn btn-primary mt-3">
+                    <i class="bi bi-list me-2"></i>Lihat Daftar Stream
+                </a>
+            </div>`;
+    }
+
+    function showErrorMessage(message) {
+        document.getElementById('liveContainer').innerHTML = `
+            <div class="alert alert-danger mx-3">
+                <i class="bi bi-x-octagon me-2"></i>
+                ${message}
+            </div>`;
+    }
+</script>
+
+<style>
+    .card {
+        border-radius: 15px;
+        transition: transform 0.2s;
+    }
+    
+    .card:hover {
+        transform: translateY(-2px);
+    }
+    
+    .bg-dark {
+        background-color: #1a1a1a !important;
+    }
+    
+    .bg-secondary {
+        background-color: #2d2d2d !important;
+    }
+    
+    .text-light {
+        color: #e8e8e8 !important;
+    }
+    
+    .btn-outline-success {
+        border-color: #28a745 !important;
+        color: #28a745 !important;
+    }
+    
+    .btn-outline-success:hover {
+        background-color: #28a745 !important;
+        color: white !important;
+    }
+
+    .alert-bright {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border-color: #000000 !important;
+    }
+</style>
+{% endblock %}
