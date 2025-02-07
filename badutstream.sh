@@ -9,7 +9,6 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # Update and install dependencies
-apt update && apt upgrade -y
 apt install -y nginx git curl unzip python3 python3-pip gdown
 
 # Install optional components (e.g., PHP & MySQL if needed)
