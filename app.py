@@ -20,7 +20,7 @@ os.makedirs(uploads_dir, exist_ok=True)
 
 videos_json_path = os.path.join(uploads_dir, 'videos.json')
 live_info_json_path = os.path.join(uploads_dir, 'live_info.json')
-FFMPEG_PATH = '/opt/homebrew/bin/ffmpeg'  # Path absolut ke FFmpeg
+FFMPEG_PATH = '/usr/bin/ffmpeg'  # Path absolut ke FFmpeg
 
 def load_uploaded_videos():
     if os.path.exists(videos_json_path):
