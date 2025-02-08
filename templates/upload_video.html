@@ -1,0 +1,454 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container">
+    <!-- Header Section -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4">
+        <h1 class="text-primary mb-3 mb-md-0 fs-4 fs-md-3">
+            <i class="bi bi-cloud-arrow-up-fill me-2"></i>Manajemen Video
+        </h1>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm" onclick="refreshPage()">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Upload Card -->
+    <div class="card bg-dark border-secondary mb-4 shadow-lg">
+        <div class="card-header bg-secondary bg-opacity-25 py-2">
+            <h4 class="text-light mb-0 fs-5">
+                <i class="bi bi-google-drive me-2"></i>Upload dari Google Drive
+            </h4>
+        </div>
+        <div class="card-body">
+            <form id="uploadForm" class="needs-validation" novalidate>
+                <div class="mb-3">
+                    <label class="form-label text-light">URL Google Drive</label>
+                    <div class="input-group">
+                        <input 
+                            type="url" 
+                            name="file_url"
+                            class="form-control bg-black border-dark text-light" 
+                            placeholder="https://drive.google.com/..."
+                            required
+                        >
+                        <button 
+                            type="submit" 
+                            class="btn btn-primary px-3 px-md-4"
+                        >
+                            <i class="bi bi-lightning-charge d-none d-md-inline"></i>
+                            <span class="d-md-none">Upload</span>
+                        </button>
+                    </div>
+                    <div class="invalid-feedback">
+                        Harap masukkan URL Google Drive yang valid
+                    </div>
+                </div>
+            </form>
+
+            <!-- Progress Bar -->
+            <div class="mt-4">
+                <div class="progress bg-black" style="height: 25px; border-radius: 12px">
+                    <div 
+                        id="progressBar" 
+                        class="progress-bar progress-bar-striped bg-success" 
+                        role="progressbar" 
+                        style="width: 0%"
+                    >
+                        <span class="progress-text">0%</span>
+                    </div>
+                </div>
+                <small class="text-secondary mt-2 d-block" id="uploadStatus">
+                    Status: Menunggu upload...
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Video List -->
+    <div class="card bg-dark border-secondary shadow-lg">
+        <div class="card-header bg-secondary bg-opacity-25 py-2">
+            <h4 class="text-light mb-0 fs-5">
+                <i class="bi bi-collection-play me-2"></i>Daftar Video
+            </h4>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-dark table-hover align-middle mb-0">
+                    <thead class="bg-black">
+                        <tr>
+                            <th class="text-primary">Nama Video</th>
+                            <th class="text-primary d-none d-md-table-cell">Ukuran</th>
+                            <th class="text-primary d-none d-sm-table-cell">Tanggal Upload</th>
+                            <th class="text-primary text-end">Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody id="videoListBody">
+                        {% for video in videos %}
+                        <tr>
+                            <td class="text-truncate" style="max-width: 150px">
+                                <i class="bi bi-file-earmark-play me-2"></i>
+                                {{ video.name }}
+                            </td>
+                            <td class="d-none d-md-table-cell">{{ video.size }}</td>
+                            <td class="d-none d-sm-table-cell">{{ video.upload_date }}</td>
+                            <td class="text-end">
+                                <div class="btn-group btn-group-sm">
+                                    <button 
+                                        class="btn btn-outline-info"
+                                        onclick="reviewVideo('{{ video.filename }}')"
+                                    >
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                    <button 
+                                        class="btn btn-outline-warning d-none d-md-inline-block"
+                                        onclick="renameVideo('{{ video.filename }}')"
+                                    >
+                                        <i class="bi bi-pencil-square"></i>
+                                    </button>
+                                    <button 
+                                        class="btn btn-outline-danger"
+                                        onclick="deleteVideo('{{ video.filename }}')"
+                                    >
+                                        <i class="bi bi-trash3"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="4" class="text-center text-secondary py-4">
+                                <i class="bi bi-inbox me-2"></i>Tidak ada video
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Review Modal -->
+<div class="modal fade" id="reviewModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content bg-dark text-light">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title fs-6 fs-md-5">
+                    <i class="bi bi-play-circle me-2"></i>Preview Video
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center p-1 p-md-3">
+                <video 
+                    id="reviewVideo" 
+                    class="w-100 rounded shadow" 
+                    controls
+                    style="max-height: 50vh"
+                >
+                    <source id="reviewVideoSource" type="video/mp4">
+                    Browser tidak mendukung pemutaran video
+                </video>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // =====================
+    // INITIALIZATION
+    // =====================
+    document.addEventListener('DOMContentLoaded', () => {
+        initializeFormValidation();
+        loadUploadedVideos();
+    });
+
+    // =====================
+    // FORM HANDLING
+    // =====================
+    function initializeFormValidation() {
+        const form = document.getElementById('uploadForm');
+        form.addEventListener('submit', handleFormSubmit);
+    }
+
+    async function handleFormSubmit(e) {
+        e.preventDefault();
+        
+        const form = e.target;
+        if (!form.checkValidity()) {
+            e.stopPropagation();
+            form.classList.add('was-validated');
+            return;
+        }
+
+        const fileUrl = form.file_url.value;
+        startUpload({ file_url: fileUrl });
+    }
+
+    // =====================
+    // UPLOAD SYSTEM
+    // =====================
+    function startUpload(data) {
+        const xhr = new XMLHttpRequest();
+        const progressBar = document.getElementById('progressBar');
+        const progressText = progressBar.querySelector('.progress-text');
+        const uploadStatus = document.getElementById('uploadStatus');
+
+        xhr.upload.addEventListener('progress', e => {
+            if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                progressBar.style.width = `${percent}%`;
+                progressText.textContent = `${percent}%`;
+                uploadStatus.textContent = `Mengunggah: ${percent}% selesai`;
+            }
+        });
+
+        xhr.addEventListener('load', () => {
+            handleUploadResponse(xhr);
+        });
+
+        xhr.addEventListener('error', () => {
+            showAlert('Terjadi kesalahan saat mengunggah', 'danger');
+            resetProgressBar();
+        });
+
+        xhr.open('POST', '/upload_video');
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.send(JSON.stringify(data));
+    }
+
+    function handleUploadResponse(xhr) {
+        const progressBar = document.getElementById('progressBar');
+        const progressText = progressBar.querySelector('.progress-text');
+        const uploadStatus = document.getElementById('uploadStatus');
+
+        if (xhr.status === 200) {
+            const response = JSON.parse(xhr.responseText);
+            if (response.success) {
+                progressBar.classList.remove('bg-success');
+                progressBar.classList.add('bg-primary');
+                uploadStatus.textContent = 'Upload berhasil!';
+                showAlert(response.message, 'success');
+                loadUploadedVideos();
+            } else {
+                showAlert(response.message, 'danger');
+            }
+        } else {
+            showAlert(`Error: ${xhr.statusText}`, 'danger');
+        }
+        
+        setTimeout(resetProgressBar, 2000);
+    }
+
+    function resetProgressBar() {
+        const progressBar = document.getElementById('progressBar');
+        progressBar.style.width = '0%';
+        progressBar.classList.remove('bg-primary');
+        progressBar.classList.add('bg-success');
+        progressBar.querySelector('.progress-text').textContent = '0%';
+        document.getElementById('uploadStatus').textContent = 'Status: Menunggu upload...';
+    }
+
+    // =====================
+    // VIDEO MANAGEMENT
+    // =====================
+    async function loadUploadedVideos() {
+        try {
+            const response = await fetch('/get_uploaded_videos');
+            const videos = await response.json();
+            renderVideoList(videos);
+        } catch (error) {
+            showAlert('Gagal memuat daftar video', 'danger');
+        }
+    }
+
+    function renderVideoList(videos) {
+        const tbody = document.getElementById('videoListBody');
+        tbody.innerHTML = videos.map(video => `
+            <tr>
+                <td class="text-truncate" style="max-width: 250px">
+                    <i class="bi bi-file-earmark-play me-2"></i>
+                    ${video.original_name}
+                </td>
+                <td>${video.size}</td>
+                <td>${video.upload_date}</td>
+                <td class="text-end">
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-info" onclick="reviewVideo('${video.filename}')">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                        <button class="btn btn-outline-warning" onclick="renameVideo('${video.filename}')">
+                            <i class="bi bi-pencil-square"></i>
+                        </button>
+                        <button class="btn btn-outline-danger" onclick="deleteVideo('${video.filename}')">
+                            <i class="bi bi-trash3"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `).join('') || `
+            <tr>
+                <td colspan="4" class="text-center text-secondary py-4">
+                    <i class="bi bi-inbox me-2"></i>Tidak ada video
+                </td>
+            </tr>`;
+    }
+
+    // =====================
+    // VIDEO ACTIONS
+    // =====================
+    function reviewVideo(filename) {
+        const videoPlayer = document.getElementById('reviewVideo');
+        const videoSource = document.getElementById('reviewVideoSource');
+        videoSource.src = `/uploads/${filename}`;
+        videoPlayer.load();
+        new bootstrap.Modal('#reviewModal').show();
+    }
+
+    async function renameVideo(filename) {
+        const newName = prompt('Masukkan nama baru:', filename);
+        if (newName) {
+            try {
+                const response = await fetch('/rename_video', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        old_filename: filename,
+                        new_filename: newName
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showAlert(result.message, 'success');
+                    loadUploadedVideos();
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (error) {
+                showAlert(error.message, 'danger');
+            }
+        }
+    }
+
+    async function deleteVideo(filename) {
+        if (confirm(`Hapus video ${filename} secara permanen?`)) {
+            try {
+                const response = await fetch('/delete_video', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showAlert(result.message, 'success');
+                    loadUploadedVideos();
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (error) {
+                showAlert(error.message, 'danger');
+            }
+        }
+    }
+
+    // =====================
+    // UTILITIES
+    // =====================
+    function showAlert(message, type) {
+        const alert = document.createElement('div');
+        alert.className = `alert alert-${type} alert-dismissible fade show`;
+        alert.innerHTML = `
+            <i class="bi ${getAlertIcon(type)} me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(alert);
+        setTimeout(() => alert.remove(), 5000);
+    }
+
+    function getAlertIcon(type) {
+        const icons = {
+            success: 'bi-check-circle',
+            danger: 'bi-x-octagon',
+            warning: 'bi-exclamation-triangle',
+            info: 'bi-info-circle'
+        };
+        return icons[type] || 'bi-info-circle';
+    }
+
+    function refreshPage() {
+        window.location.reload();
+    }
+</script>
+
+<style>
+    /* Responsive Adjustments */
+    @media (max-width: 768px) {
+        .container {
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+        
+        .card-header h4 {
+            font-size: 1rem !important;
+        }
+        
+        .table td, .table th {
+            padding: 0.75rem 0.5rem;
+        }
+        
+        .btn-group-sm > .btn {
+            padding: 0.25rem 0.5rem;
+        }
+        
+        video {
+            max-height: 40vh !important;
+        }
+    }
+
+    @media (max-width: 576px) {
+        .progress-text {
+            font-size: 0.75rem;
+        }
+        
+        #uploadStatus {
+            font-size: 0.8rem;
+        }
+        
+        .modal-body {
+            padding: 0.5rem;
+        }
+        
+        .btn-outline-info, 
+        .btn-outline-warning, 
+        .btn-outline-danger {
+            padding: 0.2rem 0.4rem;
+        }
+    }
+
+    /* Placeholder Color */
+    ::placeholder {
+        color: #aaa; /* Change this color to your desired color */
+        opacity: 1; /* Fully opaque */
+    }
+
+    :-ms-input-placeholder { /* Internet Explorer 10-11 */
+        color: #aaa;
+    }
+
+    ::-ms-input-placeholder { /* Microsoft Edge */
+        color: #aaa;
+    }
+
+    /* Specific Placeholder Color for Google Drive URL */
+    input::placeholder {
+        color: #aaa; /* Lighter color for better visibility */
+    }
+    input[placeholder="https://drive.google.com/..."]::placeholder {
+        color: #5b5b5b; /* Change this color to your desired color */
+    }
+</style>
+{% endblock %}
