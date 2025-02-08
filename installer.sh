@@ -26,6 +26,10 @@ echo "Cloning repository..."
 git clone https://github.com/orlin24/badutstream.git
 cd badutstream
 
+# Beri Izin Akses 777 ke Folder
+echo "Setting folder permissions to 777..."
+sudo chmod -R 777 /var/www/html/badutstream
+
 # Set Zona Waktu
 echo "Setting timezone to Asia/Jakarta..."
 sudo timedatectl set-timezone Asia/Jakarta
