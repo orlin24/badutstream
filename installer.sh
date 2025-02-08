@@ -44,7 +44,7 @@ echo "Creating virtual environment and installing dependencies..."
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install flask flask_cors gdow
+pip install flask flask_cors gdown
 
 # Jalankan Aplikasi
 echo "Starting application..."
