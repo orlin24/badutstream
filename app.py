@@ -132,7 +132,7 @@ def start_stream():
                 ffmpeg_command = [
                     FFMPEG_PATH,
                     '-stream_loop', '-1',
-                    '-readrate', '1.05',
+                    '-re',
                     '-i', file_path,
                     '-f', 'fifo',
                     '-fifo_format', 'flv',
@@ -253,7 +253,7 @@ def restart_stream(id):
                 ffmpeg_command = [
                     FFMPEG_PATH,
                     '-stream_loop', '-1',
-                    '-readrate', '1.05',
+                    '-re',
                     '-i', file_path,
                     '-f', 'fifo',
                     '-fifo_format', 'flv',
