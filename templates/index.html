@@ -88,11 +88,28 @@
                         </div>
                     </div>
 
+                    <!-- Bitrate -->
+                    <div class="col-12">
+                        <div class="form-group">
+                            <label for="bitrate" class="form-label text-light">
+                                <i class="bi bi-speedometer2 me-2"></i>Bitrate (opsional)
+                            </label>
+                            <input 
+                                type="number" 
+                                class="form-control bg-dark border-dark text-light" 
+                                id="bitrate" 
+                                name="bitrate"
+                                placeholder="Masukkan bitrate (dalam kbps)"
+                            >
+                            <small class="text-secondary mt-1">Biarkan kosong untuk menggunakan default</small>
+                        </div>
+                    </div>
+
                     <!-- Jadwal -->
                     <div class="col-12">
                         <div class="form-group">
                             <label for="scheduleDate" class="form-label text-light">
-                                <i class="bi bi-clock me-2"></i>Jadwalkan Stream
+                                <i class="bi bi-clock me-2"></i>Jadwalkan Stream (opsional)
                             </label>
                             <input 
                                 type="datetime-local" 
@@ -101,6 +118,24 @@
                                 name="scheduleDate"
                             >
                             <small class="text-secondary mt-1">Biarkan kosong untuk mulai langsung</small>
+                        </div>
+                    </div>
+
+                    <!-- Durasi -->
+                    <div class="col-12">
+                        <div class="form-group">
+                            <label for="duration" class="form-label text-light">
+                                <i class="bi bi-hourglass-split me-2"></i>Durasi Stream (menit) (opsional)
+                            </label>
+                            <input 
+                                type="number" 
+                                class="form-control bg-dark border-dark text-light" 
+                                id="duration" 
+                                name="duration"
+                                placeholder="Masukkan durasi dalam menit"
+                                min="1"
+                            >
+                            <small class="text-secondary mt-1">Durasi maksimum adalah 2880 menit (48 jam)</small>
                         </div>
                     </div>
 
@@ -281,7 +316,9 @@
     }
 
     input[placeholder="Masukkan judul stream"]::placeholder,
-    input[placeholder="Masukkan stream key"]::placeholder {
+    input[placeholder="Masukkan stream key"]::placeholder,
+    input[placeholder="Masukkan bitrate (dalam kbps)"]::placeholder,
+    input[placeholder="Masukkan durasi dalam menit"]::placeholder {
         color: #5b5b5b; /* Change this color to your desired color */
     }
 </style>
