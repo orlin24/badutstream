@@ -97,7 +97,7 @@
 
                             <dt class="col-sm-4">Video Source</dt>
                             <dd class="col-sm-8">
-                                <span class="badge bg-info">${data.video}</span>
+                                <span class="badge bg-info">${data.video_name}</span>
                             </dd>
                         </dl>
                     </div>
@@ -175,6 +175,7 @@
         `;
 
         document.getElementById('liveContainer').innerHTML = template;
+        initTooltips();
     }
 
     // =====================
@@ -265,6 +266,13 @@
         `;
         
         document.getElementById('response').appendChild(alertBox);
+
+        // Hapus alert setelah 5 detik
+        setTimeout(() => {
+            alertBox.classList.remove('show');
+            alertBox.classList.add('fade');
+            setTimeout(() => alertBox.remove(), 500);
+        }, 5000);
     }
 
     function getAlertIcon(type) {
@@ -295,6 +303,14 @@
                 <i class="bi bi-x-octagon me-2"></i>
                 ${message}
             </div>`;
+    }
+
+    // Fungsi untuk menginisiasi tooltips
+    function initTooltips() {
+        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.map(tooltipTriggerEl => {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
     }
 </script>
 
@@ -334,6 +350,10 @@
         background-color: #ffffff !important;
         color: #000000 !important;
         border-color: #000000 !important;
+    }
+
+    input[placeholder="Masukkan bitrate (dalam kbps)"]::placeholder {
+        color: #aaa !important; /* Buat placeholder lebih terang */
     }
 </style>
 {% endblock %}
