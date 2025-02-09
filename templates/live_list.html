@@ -71,7 +71,7 @@
                             </div>
                         </a>
                         {% else %}
-                        <div class="text-center py-3 text-secondary">
+                        <div class="text-center py-3 text-secondary" id="noActiveStreams">
                             <i class="bi bi-info-circle me-2"></i>Tidak ada stream aktif
                         </div>
                         {% endfor %}
@@ -102,7 +102,7 @@
                             </div>
                         </a>
                         {% else %}
-                        <div class="text-center py-3 text-secondary">
+                        <div class="text-center py-3 text-secondary" id="noScheduledStreams">
                             <i class="bi bi-info-circle me-2"></i>Tidak ada jadwal
                         </div>
                         {% endfor %}
@@ -133,7 +133,7 @@
                             </div>
                         </a>
                         {% else %}
-                        <div class="text-center py-3 text-secondary">
+                        <div class="text-center py-3 text-secondary" id="noStoppedStreams">
                             <i class="bi bi-info-circle me-2"></i>Tidak ada riwayat
                         </div>
                         {% endfor %}
@@ -152,6 +152,7 @@
         initializeDateTime();
         updateLiveCounts();
         setupEventListeners();
+        startPolling();
     });
 
     // =====================
@@ -180,6 +181,60 @@
         document.getElementById('activeLiveCount').textContent = counters.active;
         document.getElementById('scheduledLiveCount').textContent = counters.scheduled;
         document.getElementById('stoppedLiveCount').textContent = counters.stopped;
+
+        document.getElementById('noActiveStreams').style.display = counters.active ? 'none' : 'block';
+        document.getElementById('noScheduledStreams').style.display = counters.scheduled ? 'none' : 'block';
+        document.getElementById('noStoppedStreams').style.display = counters.stopped ? 'none' : 'block';
+    }
+
+    function updateLiveLists(lives) {
+        const activeLiveList = document.getElementById('activeLiveList');
+        const scheduledLiveList = document.getElementById('scheduledLiveList');
+        const stoppedLiveList = document.getElementById('stoppedLiveList');
+
+        activeLiveList.innerHTML = '';
+        scheduledLiveList.innerHTML = '';
+        stoppedLiveList.innerHTML = '';
+
+        for (const [id, info] of Object.entries(lives)) {
+            const listItem = document.createElement('a');
+            listItem.href = `/live_info/${id}`;
+            listItem.className = 'list-group-item list-group-item-action bg-dark text-light border-secondary live-item';
+            listItem.dataset.status = info.status;
+
+            const itemContent = `
+                <div class="d-flex justify-content-between align-items-start">
+                    <div class="me-2">
+                        <h6 class="mb-1 text-truncate">${info.title}</h6>
+                        <small class="text-secondary">${info.startTime}</small>
+                    </div>
+                    <i class="bi bi-chevron-right text-secondary"></i>
+                </div>
+            `;
+            listItem.innerHTML = itemContent;
+
+            if (info.status === 'Active') {
+                activeLiveList.appendChild(listItem);
+            } else if (info.status === 'Scheduled') {
+                scheduledLiveList.appendChild(listItem);
+            } else if (info.status === 'Stopped') {
+                stoppedLiveList.appendChild(listItem);
+            }
+        }
+
+        updateLiveCounts();
+        handleFilter();
+    }
+
+    function startPolling() {
+        setInterval(() => {
+            fetch('/all_live_info')
+                .then(response => response.json())
+                .then(data => {
+                    updateLiveLists(data);
+                })
+                .catch(error => console.error('Error fetching live info:', error));
+        }, 5000); // Polling interval: 5 seconds
     }
 
     // =====================
