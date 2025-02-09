@@ -17,7 +17,7 @@
     <div class="card bg-dark border-secondary mb-4 shadow-lg">
         <div class="card-header bg-secondary bg-opacity-25 py-2">
             <h4 class="text-light mb-0 fs-5">
-                <i class="bi bi-google-drive me-2"></i>Upload dari Google Drive
+                <i class="bi bi-google-drive me-2"></i>Download dari Google Drive
             </h4>
         </div>
         <div class="card-body">
@@ -37,7 +37,7 @@
                             class="btn btn-primary px-3 px-md-4"
                         >
                             <i class="bi bi-lightning-charge d-none d-md-inline"></i>
-                            <span class="d-md-none">Upload</span>
+                            <span class="d-md-none">Download</span>
                         </button>
                     </div>
                     <div class="invalid-feedback">
@@ -59,7 +59,7 @@
                     </div>
                 </div>
                 <small class="text-secondary mt-2 d-block" id="uploadStatus">
-                    Status: Menunggu upload...
+                    Status: Menunggu download...
                 </small>
             </div>
         </div>
@@ -78,8 +78,8 @@
                     <thead class="bg-black">
                         <tr>
                             <th class="text-primary">Nama Video</th>
-                            <th class="text-primary d-none d-md-table-cell">Ukuran</th>
-                            <th class="text-primary d-none d-sm-table-cell">Tanggal Upload</th>
+                            <th class="text-primary">Ukuran</th>
+                            <th class="text-primary">Tanggal Upload</th>
                             <th class="text-primary text-end">Aksi</th>
                         </tr>
                     </thead>
@@ -88,10 +88,10 @@
                         <tr>
                             <td class="text-truncate" style="max-width: 150px">
                                 <i class="bi bi-file-earmark-play me-2"></i>
-                                {{ video.name }}
+                                {{ video.original_name }}
                             </td>
-                            <td class="d-none d-md-table-cell">{{ video.size }}</td>
-                            <td class="d-none d-sm-table-cell">{{ video.upload_date }}</td>
+                            <td>{{ video.size }}</td>
+                            <td>{{ video.upload_date }}</td>
                             <td class="text-end">
                                 <div class="btn-group btn-group-sm">
                                     <button 
@@ -101,7 +101,7 @@
                                         <i class="bi bi-eye"></i>
                                     </button>
                                     <button 
-                                        class="btn btn-outline-warning d-none d-md-inline-block"
+                                        class="btn btn-outline-warning"
                                         onclick="renameVideo('{{ video.filename }}')"
                                     >
                                         <i class="bi bi-pencil-square"></i>
