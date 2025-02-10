@@ -1,5 +1,31 @@
 #!/bin/bash
 
+# Fungsi untuk validasi lisensi
+validate_license() {
+    local license_key=$1
+    local api_url="http://127.0.0.1:5000/validate_license"
+    local response=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"license_key\": \"${license_key}\"}" ${api_url})
+    local status=$(echo $response | jq -r '.status')
+
+    if [ "$status" == "valid" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Meminta License Key dari pengguna
+read -p "Masukkan License Key Anda: " license_key
+
+# Validasi License Key
+echo "Memvalidasi License Key..."
+if validate_license $license_key; then
+    echo "Lisensi valid. Melanjutkan instalasi..."
+else
+    echo "Lisensi tidak valid. Instalasi diblokir."
+    exit 1
+fi
+
 # Update & Upgrade Sistem
 echo "Updating and upgrading system..."
 sudo apt update && sudo apt upgrade -y
