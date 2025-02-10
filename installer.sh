@@ -84,6 +84,7 @@ sudo apt install ffmpeg -y
 
 # Buat Virtual Environment dan Install Dependencies
 echo "Creating virtual environment and installing dependencies..."
+apt install python3-pip
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
