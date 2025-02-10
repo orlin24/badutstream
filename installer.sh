@@ -14,6 +14,14 @@ validate_license() {
     fi
 }
 
+# Memeriksa dan menginstal jq jika tidak ditemukan
+if ! command -v jq &> /dev/null
+then
+    echo "jq could not be found. Installing jq..."
+    sudo apt-get update
+    sudo apt-get install -y jq
+fi
+
 # Meminta License Key dari pengguna
 read -p "Masukkan License Key Anda: " license_key
 
