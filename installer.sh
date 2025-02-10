@@ -3,7 +3,7 @@
 # Fungsi untuk validasi lisensi
 validate_license() {
     local license_key=$1
-    local api_url="http://127.0.0.1:5000/validate_license"
+    local api_url="http://209.97.167.85:5000/validate_license"
     local response=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"license_key\": \"${license_key}\"}" ${api_url})
     local status=$(echo $response | jq -r '.status')
 
