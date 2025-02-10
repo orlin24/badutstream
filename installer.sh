@@ -22,6 +22,14 @@ then
     sudo apt-get install -y jq
 fi
 
+# Memeriksa apakah API Flask berjalan
+echo "Checking if Flask API is running..."
+if ! curl -s http://127.0.0.1:5000/ &> /dev/null
+then
+    echo "Flask API is not running. Please start the Flask API and try again."
+    exit 1
+fi
+
 # Meminta License Key dari pengguna
 read -p "Masukkan License Key Anda: " license_key
 
