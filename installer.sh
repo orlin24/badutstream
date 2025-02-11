@@ -3,7 +3,7 @@
 # Fungsi untuk validasi lisensi
 validate_license() {
     local license_key=$1
-    local api_url="https://panel.abangjoss.com/validate_license"
+    local api_url="http://152.42.254.194:5000/validate_license"
     local response=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"license_key\": \"${license_key}\"}" ${api_url})
     echo "Response from API: $response"  # Debugging line
     local status=$(echo $response | jq -r '.status')
@@ -25,7 +25,7 @@ fi
 
 # Memeriksa apakah API Flask berjalan
 echo "Checking if Flask API is running..."
-if ! curl -s https://panel.abangjoss.com/ &> /dev/null
+if ! curl -s http://152.42.254.194:5000/ &> /dev/null
 then
     echo "Flask API is not running. Please start the Flask API and try again."
     exit 1
