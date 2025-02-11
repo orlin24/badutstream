@@ -38,7 +38,7 @@ elif platform.system() == 'Darwin':  # Darwin adalah nama lain untuk macOS
 else:
     raise Exception("Unsupported operating system")
 
-LICENSE_API_URL = "http://152.42.254.194/validate_license"
+LICENSE_API_URL = "http://152.42.254.194:5000/validate_license"
 license_file_path = os.path.join(BASE_DIR, 'license.json')
 
 def load_license():
