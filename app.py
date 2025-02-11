@@ -131,11 +131,17 @@ def stop_stream_manually(live_id):
     if live_id in processes:
         process = processes[live_id]
         process.terminate()
-        process.wait(timeout=10)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
         del processes[live_id]
     if live_id in live_info:
         live_info[live_id]['status'] = 'Stopped'
     save_live_info()
+    # Tambahkan penundaan untuk memastikan YouTube memproses penghentian streaming
+    time.sleep(10)
 
 def stop_all_active_streams():
     for live_id, info in live_info.items():
@@ -250,15 +256,7 @@ def stop_stream(id):
         return jsonify({'message': 'Stream not found'}), 404
 
     try:
-        # Check if the process is running
-        if id in processes:
-            process = processes[id]
-            process.terminate()
-            process.wait(timeout=10)
-            del processes[id]
-
-        live_info[id]['status'] = 'Stopped'
-        save_live_info()
+        stop_stream_manually(id)
         return jsonify({'message': 'Streaming berhasil dihentikan'})
     except Exception as e:
         logging.error(f"Stop error: {str(e)}")
