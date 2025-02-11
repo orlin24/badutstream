@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session
 from flask_cors import CORS
 from functools import wraps
+import time
 import os
 import subprocess
 import uuid
@@ -81,17 +82,14 @@ def check_and_update_scheduled_streams():
 def run_ffmpeg(live_id, info):
     try:
         logging.debug(f"Starting FFmpeg for live_id: {live_id} with info: {info}")
-        live_info[live_id]['status'] = 'Active'
-        save_live_info()
+        live_info[live_id]['status'] = 'Active'  # Perbarui status menjadi aktif
+        save_live_info()  # Simpan informasi streaming
         
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
-        bitrate = info.get('bitrate', '5000k')  # Default to 5000k if bitrate is not set
-        duration = int(info.get('duration', 0))  # Default to 0 (unlimited) if duration is not set
+        bitrate = info.get('bitrate', '5000k')  # Default ke 5000k jika bitrate tidak diatur
+        duration = int(info.get('duration', 0))  # Default ke 0 (tak terbatas) jika durasi tidak diatur
 
-        if bitrate is None:
-            bitrate = '5000k'
-        
         ffmpeg_command = f"{FFMPEG_PATH} -stream_loop -1 -re -i {shlex.quote(file_path)} " \
                          f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
                          f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
@@ -111,7 +109,7 @@ def run_ffmpeg(live_id, info):
         logging.debug(f"Running FFmpeg command: {ffmpeg_command}")
 
         if duration > 0:
-            # Schedule to stop the stream after the specified duration
+            # Jadwalkan untuk menghentikan streaming setelah durasi yang ditentukan
             stop_time = datetime.now() + timedelta(minutes=duration)
             threading.Timer((stop_time - datetime.now()).total_seconds(), stop_stream_manually, args=[live_id]).start()
 
@@ -122,7 +120,7 @@ def run_ffmpeg(live_id, info):
     finally:
         if live_id in processes:
             del processes[live_id]
-        live_info[live_id]['status'] = 'Stopped'
+        live_info[live_id]['status'] = 'Stopped'  # Perbarui status menjadi dihentikan
         save_live_info()
         log_file.close()
 
@@ -500,4 +498,4 @@ stop_all_active_streams()
 periodic_check()
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)
