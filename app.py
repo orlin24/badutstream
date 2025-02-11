@@ -38,6 +38,45 @@ elif platform.system() == 'Darwin':  # Darwin adalah nama lain untuk macOS
 else:
     raise Exception("Unsupported operating system")
 
+LICENSE_API_URL = "http://152.42.254.194/validate_license"
+license_file_path = os.path.join(BASE_DIR, 'license.json')
+
+def load_license():
+    if os.path.exists(license_file_path):
+        with open(license_file_path, 'r') as file:
+            return json.load(file)
+    return None
+
+def save_license(license_data):
+    with open(license_file_path, 'w') as file:
+        json.dump(license_data, file)
+
+def is_license_valid():
+    license_data = load_license()
+    if not license_data:
+        return False
+    response = requests.post(LICENSE_API_URL, json={'license_key': license_data['license_key']})
+    if response.status_code == 200:
+        result = response.json()
+        if result['valid']:
+            expiry_date = datetime.fromisoformat(result['expiry_date'])
+            return datetime.now() < expiry_date
+    return False
+
+def check_license():
+    if not is_license_valid():
+        logging.error("License has expired or is invalid.")
+        return False
+    return True
+
+def license_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not check_license():
+            return redirect(url_for('license'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 def load_uploaded_videos():
     if os.path.exists(videos_json_path):
         with open(videos_json_path, 'r') as file:
@@ -195,11 +234,13 @@ def logout():
 
 @app.route('/')
 @login_required
+@license_required
 def index():
     return render_template('index.html', title='Home', videos=uploaded_videos)
 
 @app.route('/start_stream', methods=['POST'])
 @login_required
+@license_required
 def start_stream():
     try:
         data = request.form
@@ -249,6 +290,7 @@ def start_stream():
 
 @app.route('/stop_stream/<id>', methods=['POST'])
 @login_required
+@license_required
 def stop_stream(id):
     if id not in live_info:
         return jsonify({'message': 'Stream not found'}), 404
@@ -262,6 +304,7 @@ def stop_stream(id):
 
 @app.route('/update_bitrate/<id>', methods=['POST'])
 @login_required
+@license_required
 def update_bitrate(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
@@ -291,6 +334,7 @@ def update_bitrate(id):
 
 @app.route('/stream_logs/<id>')
 @login_required
+@license_required
 def stream_logs(id):
     log_file = f'ffmpeg_{id}.log'
     if not os.path.exists(log_file):
@@ -303,6 +347,7 @@ def stream_logs(id):
 
 @app.route('/restart_stream/<id>', methods=['POST'])
 @login_required
+@license_required
 def restart_stream(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
@@ -338,6 +383,7 @@ def restart_stream(id):
 
 @app.route('/delete_stream/<id>', methods=['POST'])
 @login_required
+@license_required
 def delete_stream(id):
     logging.debug(f"Received request to delete stream with ID: {id}")
     if id not in live_info:
@@ -360,6 +406,7 @@ def delete_stream(id):
 
 @app.route('/live_info/<id>')
 @login_required
+@license_required
 def live_info_page(id):
     if id not in live_info:
         return redirect(url_for('live_list'))
@@ -367,6 +414,7 @@ def live_info_page(id):
 
 @app.route('/get_live_info/<id>')
 @login_required
+@license_required
 def get_live_info(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
@@ -377,16 +425,19 @@ def get_live_info(id):
 
 @app.route('/all_live_info')
 @login_required
+@license_required
 def all_live_info():
     return jsonify(list(live_info.values()))
 
 @app.route('/live_list')
 @login_required
+@license_required
 def live_list():
     return render_template('live_list.html', title='Live List', lives=live_info)
 
 @app.route('/upload_video', methods=['GET', 'POST'])
 @login_required
+@license_required
 def upload_video():
     if request.method == 'POST':
         try:
@@ -429,16 +480,19 @@ def upload_video():
 
 @app.route('/uploads/<filename>')
 @login_required
+@license_required
 def uploaded_file(filename):
     return send_from_directory(uploads_dir, filename)
 
 @app.route('/get_uploaded_videos', methods=['GET'])
 @login_required
+@license_required
 def get_uploaded_videos():
     return jsonify(uploaded_videos)
 
 @app.route('/rename_video', methods=['POST'])
 @login_required
+@license_required
 def rename_video():
     try:
         old_filename = request.json['old_filename']
@@ -471,6 +525,7 @@ def rename_video():
 
 @app.route('/delete_video', methods=['POST'])
 @login_required
+@license_required
 def delete_video():
     try:
         filename = request.json['filename']
@@ -496,6 +551,26 @@ stop_all_active_streams()
 
 # Start periodic check for scheduled streams
 periodic_check()
+
+@app.route('/license', methods=['GET', 'POST'])
+def license():
+    if request.method == 'POST':
+        license_key = request.json['license_key']
+        response = requests.post(LICENSE_API_URL, json={'license_key': license_key})
+        if response.status_code == 200:
+            result = response.json()
+            if result['valid']:
+                license_data = {
+                    "license_key": license_key,
+                    "expiry_date": result['expiry_date']
+                }
+                save_license(license_data)
+                return jsonify({'success': True, 'message': 'License updated successfully!'})
+            else:
+                return jsonify({'success': False, 'message': 'Invalid license key!'}), 400
+        else:
+            return jsonify({'success': False, 'message': 'Error validating license key!'}), 500
+    return render_template('license.html')
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
