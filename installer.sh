@@ -1,47 +1,47 @@
 #!/bin/bash
 
 # Fungsi untuk validasi lisensi
-validate_license() {
-    local license_key=$1
-    local api_url="http://152.42.254.194:5000/validate_license"
-    local response=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"license_key\": \"${license_key}\"}" ${api_url})
-    echo "Response from API: $response"  # Debugging line
-    local status=$(echo $response | jq -r '.status')
+# validate_license() {
+#     local license_key=$1
+#     local api_url="http://152.42.254.194:5000/validate_license"
+#     local response=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"license_key\": \"${license_key}\"}" ${api_url})
+#     echo "Response from API: $response"  # Debugging line
+#     local status=$(echo $response | jq -r '.status')
 
-    if [ "$status" == "valid" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
+#     if [ "$status" == "valid" ]; then
+#         return 0
+#     else
+#         return 1
+#     fi
+# }
 
-# Memeriksa dan menginstal jq jika tidak ditemukan
-if ! command -v jq &> /dev/null
-then
-    echo "jq could not be found. Installing jq..."
-    sudo apt-get update
-    sudo apt-get install -y jq
-fi
+# # Memeriksa dan menginstal jq jika tidak ditemukan
+# if ! command -v jq &> /dev/null
+# then
+#     echo "jq could not be found. Installing jq..."
+#     sudo apt-get update
+#     sudo apt-get install -y jq
+# fi
 
-# Memeriksa apakah API Flask berjalan
-echo "Checking if Flask API is running..."
-if ! curl -s http://152.42.254.194:5000/ &> /dev/null
-then
-    echo "Flask API is not running. Please start the Flask API and try again."
-    exit 1
-fi
+# # Memeriksa apakah API Flask berjalan
+# echo "Checking if Flask API is running..."
+# if ! curl -s http://152.42.254.194:5000/ &> /dev/null
+# then
+#     echo "Flask API is not running. Please start the Flask API and try again."
+#     exit 1
+# fi
 
-# Meminta License Key dari pengguna
-read -p "Masukkan License Key Anda: " license_key
+# # Meminta License Key dari pengguna
+# read -p "Masukkan License Key Anda: " license_key
 
-# Validasi License Key
-echo "Memvalidasi License Key..."
-if validate_license $license_key; then
-    echo "Lisensi valid. Melanjutkan instalasi..."
-else
-    echo "Lisensi tidak valid. Instalasi diblokir."
-    exit 1
-fi
+# # Validasi License Key
+# echo "Memvalidasi License Key..."
+# if validate_license $license_key; then
+#     echo "Lisensi valid. Melanjutkan instalasi..."
+# else
+#     echo "Lisensi tidak valid. Instalasi diblokir."
+#     exit 1
+# fi
 
 # Update & Upgrade Sistem
 echo "Updating and upgrading system..."
