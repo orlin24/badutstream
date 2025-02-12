@@ -89,6 +89,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install flask flask_cors gdown psutil cryptography
+tmux
 
 # Jalankan Aplikasi
 echo "Starting application..."
