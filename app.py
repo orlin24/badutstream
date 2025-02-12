@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session, make_response
+from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session, make_response, has_request_context
 from flask_cors import CORS
 from functools import wraps
 import time
@@ -33,10 +33,8 @@ live_info_json_path = os.path.join(uploads_dir, 'live_info.json')
 # Tentukan path FFmpeg sesuai sistem operasi
 if platform.system() == 'Linux':
     FFMPEG_PATH = '/usr/bin/ffmpeg'
-elif platform.system() == 'Darwin':
+elif platform.system() == 'Darwin':  # macOS
     FFMPEG_PATH = '/opt/homebrew/bin/ffmpeg'
-elif platform.system() == 'Windows':
-    FFMPEG_PATH = r'C:\\ffmpeg\\bin\\ffmpeg.exe'
 else:
     raise Exception("Unsupported operating system")
 
@@ -44,13 +42,16 @@ else:
 LICENSE_API_URL = "http://152.42.254.194:5000/validate_license"
 license_file_path = os.path.join(BASE_DIR, 'license.json')
 
-# --- Manajemen Lisensi (Hanya melakukan validasi API sekali) ---
+# -------------------- Manajemen Lisensi --------------------
 
 def load_license_from_cookies():
-    license_key = request.cookies.get('license_key')
-    expiry_date = request.cookies.get('expiry_date')
-    if license_key and expiry_date:
-        return {"license_key": license_key, "expiry_date": expiry_date}
+    # Jika ada request context, ambil dari cookies.
+    if has_request_context():
+        license_key = request.cookies.get('license_key')
+        expiry_date = request.cookies.get('expiry_date')
+        if license_key and expiry_date:
+            return {"license_key": license_key, "expiry_date": expiry_date}
+    # Jika tidak ada context, atau data tidak tersedia di cookies, ambil dari file.
     return load_license()
 
 def save_license_to_cookies(response, license_data):
@@ -88,7 +89,6 @@ def check_license():
         return False
     return True
 
-# Decorator untuk route yang memerlukan lisensi valid
 def license_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -97,7 +97,7 @@ def license_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- Manajemen Video & Live Streaming ---
+# -------------------- Manajemen Video & Live Streaming --------------------
 
 def load_uploaded_videos():
     if os.path.exists(videos_json_path):
@@ -201,6 +201,7 @@ def stop_stream_manually(live_id):
     time.sleep(10)
 
 def stop_all_active_streams():
+    # Jangan mengakses request cookies di sini, load_license_from_cookies() sudah aman karena cek has_request_context()
     if not check_license():
         logging.error("License has expired or is invalid. Stopping all active streams.")
         for live_id, info in live_info.items():
@@ -213,9 +214,7 @@ def periodic_check():
     check_and_update_scheduled_streams()
     threading.Timer(60, periodic_check).start()
 
-# (Catatan: Fungsi periodic_license_check() dihilangkan agar tidak ada panggilan ulang ke API lisensi)
-
-# --- Manajemen User (Login Sederhana) ---
+# -------------------- Manajemen User (Login Sederhana) --------------------
 
 users = {
     "gebang": "gebang",
@@ -564,7 +563,7 @@ stop_all_active_streams()
 # Mulai pemeriksaan periodik untuk streaming terjadwal
 periodic_check()
 
-# --- Route untuk input lisensi ---
+# -------------------- Route untuk Input Lisensi --------------------
 @app.route('/license', methods=['GET', 'POST'])
 def license():
     if request.method == 'POST':
