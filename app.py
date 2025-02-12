@@ -1,7 +1,6 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session, make_response, has_request_context
+from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session
 from flask_cors import CORS
 from functools import wraps
-import time
 import os
 import subprocess
 import uuid
@@ -16,13 +15,13 @@ import requests
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')  # Ambil dari environment variable
-CORS(app)  # Aktifkan CORS untuk semua route
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')  # Load from env
+CORS(app)  # Enable CORS for all routes
 
 # Konfigurasi logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Konfigurasi direktori
+# Konfigurasi path
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 uploads_dir = os.path.join(BASE_DIR, 'uploads')
 os.makedirs(uploads_dir, exist_ok=True)
@@ -30,74 +29,13 @@ os.makedirs(uploads_dir, exist_ok=True)
 videos_json_path = os.path.join(uploads_dir, 'videos.json')
 live_info_json_path = os.path.join(uploads_dir, 'live_info.json')
 
-# Tentukan path FFmpeg sesuai sistem operasi
+# Tentukan path FFmpeg berdasarkan sistem operasi
 if platform.system() == 'Linux':
     FFMPEG_PATH = '/usr/bin/ffmpeg'
-elif platform.system() == 'Darwin':  # macOS
+elif platform.system() == 'Darwin':  # Darwin adalah nama lain untuk macOS
     FFMPEG_PATH = '/opt/homebrew/bin/ffmpeg'
 else:
     raise Exception("Unsupported operating system")
-
-# URL API validasi lisensi (hanya digunakan saat input lisensi)
-LICENSE_API_URL = "http://152.42.254.194:5000/validate_license"
-license_file_path = os.path.join(BASE_DIR, 'license.json')
-
-# -------------------- Manajemen Lisensi --------------------
-
-def load_license_from_cookies():
-    # Jika ada request context, ambil dari cookies.
-    if has_request_context():
-        license_key = request.cookies.get('license_key')
-        expiry_date = request.cookies.get('expiry_date')
-        if license_key and expiry_date:
-            return {"license_key": license_key, "expiry_date": expiry_date}
-    # Jika tidak ada context, atau data tidak tersedia di cookies, ambil dari file.
-    return load_license()
-
-def save_license_to_cookies(response, license_data):
-    response.set_cookie('license_key', license_data['license_key'], max_age=30*24*60*60)  # 30 hari
-    response.set_cookie('expiry_date', license_data['expiry_date'], max_age=30*24*60*60)  # 30 hari
-    save_license(license_data)
-    return response
-
-def load_license():
-    if os.path.exists(license_file_path):
-        with open(license_file_path, 'r') as file:
-            return json.load(file)
-    return None
-
-def save_license(license_data):
-    with open(license_file_path, 'w') as file:
-        json.dump(license_data, file)
-
-# Fungsi validasi lisensi tidak memanggil API eksternal lagi.
-# Cukup membandingkan tanggal kedaluwarsa yang tersimpan dengan waktu saat ini.
-def is_license_valid():
-    license_data = load_license_from_cookies()
-    if not license_data:
-        return False
-    try:
-        expiry_date = datetime.fromisoformat(license_data["expiry_date"])
-        return datetime.now() < expiry_date
-    except Exception as e:
-        logging.error(f"Error parsing expiry_date: {str(e)}")
-        return False
-
-def check_license():
-    if not is_license_valid():
-        logging.error("License has expired or is invalid.")
-        return False
-    return True
-
-def license_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not check_license():
-            return redirect(url_for('license'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-# -------------------- Manajemen Video & Live Streaming --------------------
 
 def load_uploaded_videos():
     if os.path.exists(videos_json_path):
@@ -148,9 +86,12 @@ def run_ffmpeg(live_id, info):
         
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
-        bitrate = info.get('bitrate', '5000k')
-        duration = int(info.get('duration', 0))
+        bitrate = info.get('bitrate', '5000k')  # Default to 5000k if bitrate is not set
+        duration = int(info.get('duration', 0))  # Default to 0 (unlimited) if duration is not set
 
+        if bitrate is None:
+            bitrate = '5000k'
+        
         ffmpeg_command = f"{FFMPEG_PATH} -stream_loop -1 -re -i {shlex.quote(file_path)} " \
                          f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
                          f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
@@ -170,6 +111,7 @@ def run_ffmpeg(live_id, info):
         logging.debug(f"Running FFmpeg command: {ffmpeg_command}")
 
         if duration > 0:
+            # Schedule to stop the stream after the specified duration
             stop_time = datetime.now() + timedelta(minutes=duration)
             threading.Timer((stop_time - datetime.now()).total_seconds(), stop_stream_manually, args=[live_id]).start()
 
@@ -189,37 +131,26 @@ def stop_stream_manually(live_id):
     if live_id in processes:
         process = processes[live_id]
         process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
+        process.wait(timeout=10)
         del processes[live_id]
     if live_id in live_info:
         live_info[live_id]['status'] = 'Stopped'
     save_live_info()
-    time.sleep(10)
 
 def stop_all_active_streams():
-    # Jangan mengakses request cookies di sini, load_license_from_cookies() sudah aman karena cek has_request_context()
-    if not check_license():
-        logging.error("License has expired or is invalid. Stopping all active streams.")
-        for live_id, info in live_info.items():
-            if info['status'] == 'Active':
-                stop_stream_manually(live_id)
+    for live_id, info in live_info.items():
+        if info['status'] == 'Active':
+            stop_stream_manually(live_id)
 
 def periodic_check():
-    if not check_license():
-        stop_all_active_streams()
     check_and_update_scheduled_streams()
     threading.Timer(60, periodic_check).start()
-
-# -------------------- Manajemen User (Login Sederhana) --------------------
 
 users = {
     "gebang": "gebang",
 }
 
+# Login required decorator
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -229,6 +160,7 @@ def login_required(f):
     return decorated_function
 
 def format_size(size):
+    """Convert file size to human-readable format."""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024:
             return f"{size:.2f} {unit}"
@@ -259,18 +191,13 @@ def logout():
 
 @app.route('/')
 @login_required
-@license_required
 def index():
     return render_template('index.html', title='Home', videos=uploaded_videos)
 
 @app.route('/start_stream', methods=['POST'])
 @login_required
-@license_required
 def start_stream():
     try:
-        if not check_license():
-            return jsonify({'message': 'License has expired or is invalid.'}), 403
-
         data = request.form
         title = data.get('title')
         video_filename = data.get('video')
@@ -286,7 +213,9 @@ def start_stream():
         if not video:
             return jsonify({'message': 'Video not found'}), 404
 
+        file_path = os.path.abspath(os.path.join(uploads_dir, video_filename))
         live_id = str(uuid.uuid4())
+
         live_info[live_id] = {
             'title': title,
             'video': video_filename,
@@ -294,7 +223,7 @@ def start_stream():
             'status': 'Scheduled' if schedule_date else 'Pending',
             'startTime': schedule_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'bitrate': f'{bitrate}k' if bitrate else '5000k',
-            'duration': int(duration) if duration else 0
+            'duration': int(duration) if duration else 0  # Default to 0 (unlimited) if duration is not set
         }
         save_live_info()
 
@@ -316,13 +245,20 @@ def start_stream():
 
 @app.route('/stop_stream/<id>', methods=['POST'])
 @login_required
-@license_required
 def stop_stream(id):
     if id not in live_info:
         return jsonify({'message': 'Stream not found'}), 404
 
     try:
-        stop_stream_manually(id)
+        # Check if the process is running
+        if id in processes:
+            process = processes[id]
+            process.terminate()
+            process.wait(timeout=10)
+            del processes[id]
+
+        live_info[id]['status'] = 'Stopped'
+        save_live_info()
         return jsonify({'message': 'Streaming berhasil dihentikan'})
     except Exception as e:
         logging.error(f"Stop error: {str(e)}")
@@ -330,7 +266,6 @@ def stop_stream(id):
 
 @app.route('/update_bitrate/<id>', methods=['POST'])
 @login_required
-@license_required
 def update_bitrate(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
@@ -340,9 +275,11 @@ def update_bitrate(id):
         if not bitrate:
             return jsonify({'message': 'Bitrate is required'}), 400
 
+        # Update bitrate in live_info
         live_info[id]['bitrate'] = f'{bitrate}k'
         save_live_info()
 
+        # Restart the stream to apply the new bitrate
         if id in processes:
             process = processes[id]
             process.terminate()
@@ -358,7 +295,6 @@ def update_bitrate(id):
 
 @app.route('/stream_logs/<id>')
 @login_required
-@license_required
 def stream_logs(id):
     log_file = f'ffmpeg_{id}.log'
     if not os.path.exists(log_file):
@@ -371,7 +307,6 @@ def stream_logs(id):
 
 @app.route('/restart_stream/<id>', methods=['POST'])
 @login_required
-@license_required
 def restart_stream(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
@@ -379,16 +314,23 @@ def restart_stream(id):
     try:
         info = live_info[id]
         
+        # 1. Hentikan proses lama jika masih berjalan
         if id in processes:
             old_process = processes[id]
-            if old_process.poll() is None:
+            if old_process.poll() is None:  # Proses masih aktif
                 old_process.terminate()
                 old_process.wait(timeout=10)
             del processes[id]
 
+        # 2. Dapatkan parameter streaming
+        file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
+        stream_key = info['streamKey']
+        
+        # 3. Gunakan fungsi yang sama dengan start_stream
         logging.debug(f"Restarting stream {id}")
         threading.Thread(target=run_ffmpeg, args=[id, info]).start()
 
+        # 4. Update waktu mulai
         live_info[id]['startTime'] = datetime.now().isoformat()
         save_live_info()
 
@@ -400,7 +342,6 @@ def restart_stream(id):
 
 @app.route('/delete_stream/<id>', methods=['POST'])
 @login_required
-@license_required
 def delete_stream(id):
     logging.debug(f"Received request to delete stream with ID: {id}")
     if id not in live_info:
@@ -423,7 +364,6 @@ def delete_stream(id):
 
 @app.route('/live_info/<id>')
 @login_required
-@license_required
 def live_info_page(id):
     if id not in live_info:
         return redirect(url_for('live_list'))
@@ -431,45 +371,46 @@ def live_info_page(id):
 
 @app.route('/get_live_info/<id>')
 @login_required
-@license_required
 def get_live_info(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
     info = live_info[id]
-    info['id'] = id
-    info['video_name'] = info['video'].split('_', 1)[-1]
+    info['id'] = id  # Add ID to the data to be returned
+    info['video_name'] = info['video'].split('_', 1)[-1]  # Extract the original name without the unique ID
     return jsonify(info)
 
 @app.route('/all_live_info')
 @login_required
-@license_required
 def all_live_info():
     return jsonify(list(live_info.values()))
 
 @app.route('/live_list')
 @login_required
-@license_required
 def live_list():
     return render_template('live_list.html', title='Live List', lives=live_info)
 
 @app.route('/upload_video', methods=['GET', 'POST'])
 @login_required
-@license_required
 def upload_video():
     if request.method == 'POST':
         try:
+            # Get Google Drive file URL from request
             file_url = request.json['file_url']
             logging.debug(f"Received file_url: {file_url}")
 
+            # Get the original file name from Google Drive URL
             original_name = get_file_name_from_google_drive_url(file_url)
             unique_filename = f"{uuid.uuid4()}_{original_name}"
             file_path = os.path.join(uploads_dir, unique_filename)
             
+            # Use URL or file ID to download with gdown
             gdown.download(url=file_url, output=file_path, quiet=False, fuzzy=True)
             logging.debug(f"Saving file to: {file_path}")
 
+            # Get file size
             file_size = os.path.getsize(file_path)
 
+            # Add the uploaded video to the list
             uploaded_videos.append({
                 'filename': unique_filename,
                 'original_name': original_name,
@@ -477,6 +418,7 @@ def upload_video():
                 'upload_date': datetime.now().strftime("%Y-%m-%d")
             })
 
+            # Save the uploaded videos to the JSON file
             save_uploaded_videos()
 
             return jsonify({
@@ -491,19 +433,16 @@ def upload_video():
 
 @app.route('/uploads/<filename>')
 @login_required
-@license_required
 def uploaded_file(filename):
     return send_from_directory(uploads_dir, filename)
 
 @app.route('/get_uploaded_videos', methods=['GET'])
 @login_required
-@license_required
 def get_uploaded_videos():
     return jsonify(uploaded_videos)
 
 @app.route('/rename_video', methods=['POST'])
 @login_required
-@license_required
 def rename_video():
     try:
         old_filename = request.json['old_filename']
@@ -536,7 +475,6 @@ def rename_video():
 
 @app.route('/delete_video', methods=['POST'])
 @login_required
-@license_required
 def delete_video():
     try:
         filename = request.json['filename']
@@ -557,13 +495,53 @@ def delete_video():
 if not os.path.exists(uploads_dir):
     os.makedirs(uploads_dir)
 
-# Pastikan semua stream aktif dihentikan saat startup
+# Ensure that all active streams are marked as stopped on startup
 stop_all_active_streams()
 
-# Mulai pemeriksaan periodik untuk streaming terjadwal
+# Start periodic check for scheduled streams
 periodic_check()
 
-# -------------------- Route untuk Input Lisensi --------------------
+
+# -------------------- Manajemen Lisensi --------------------
+
+LICENSE_API_URL = "http://152.42.254.194:5000/validate_license"
+license_file_path = os.path.join(BASE_DIR, 'license.json')
+
+def load_license():
+    if os.path.exists(license_file_path):
+        with open(license_file_path, 'r') as file:
+            return json.load(file)
+    return None
+
+def save_license(license_data):
+    with open(license_file_path, 'w') as file:
+        json.dump(license_data, file)
+
+def is_license_valid():
+    license_data = load_license()
+    if not license_data:
+        return False
+    try:
+        expiry_date = datetime.fromisoformat(license_data["expiry_date"])
+        return datetime.now() < expiry_date
+    except Exception as e:
+        logging.error(f"Error parsing expiry_date: {str(e)}")
+        return False
+
+def check_license():
+    if not is_license_valid():
+        logging.error("License has expired or is invalid.")
+        return False
+    return True
+
+def license_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not check_license():
+            return redirect(url_for('license'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route('/license', methods=['GET', 'POST'])
 def license():
     if request.method == 'POST':
@@ -580,14 +558,14 @@ def license():
                     "license_key": license_key,
                     "expiry_date": result['expiry_date']
                 }
-                resp = make_response(jsonify({'success': True, 'message': 'License updated successfully!'}))
-                save_license_to_cookies(resp, license_data)
-                return resp
+                save_license(license_data)
+                return jsonify({'success': True, 'message': 'License updated successfully!'})
             else:
                 return jsonify({'success': False, 'message': 'Invalid license key!'}), 400
         else:
             return jsonify({'success': False, 'message': 'Error validating license key!'}), 500
     return render_template('license.html')
 
+
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
