@@ -23,6 +23,9 @@ CORS(app)  # Enable CORS for all routes
 # Konfigurasi logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Gunakan lock untuk menghindari race condition saat menghapus proses dari dictionary
+process_lock = threading.Lock()
+
 # Konfigurasi path
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 uploads_dir = os.path.join(BASE_DIR, 'uploads')
@@ -128,23 +131,25 @@ def run_ffmpeg(live_id, info):
 
 def stop_stream_manually(live_id):
     logging.debug(f"Attempting to stop stream manually for live_id: {live_id}")
-    
-    if live_id in processes:
-        process = processes[live_id]
-        os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # Hentikan semua proses dalam group
-    
+
+    with process_lock:  # Pastikan hanya satu thread yang bisa mengakses `processes` sekaligus
+        process = processes.pop(live_id, None)  # Gunakan pop agar tidak error jika key tidak ada
+
+    if process:  # Jika proses ditemukan, hentikan
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)  # Paksa hentikan jika masih berjalan
             process.wait(timeout=10)
-    
-        del processes[live_id]
 
     if live_id in live_info:
         live_info[live_id]['status'] = 'Stopped'
-    save_live_info()
-    time.sleep(5)  # Tambahkan delay agar server streaming bisa memproses penghentian
+        save_live_info()
+
+    logging.debug(f"Stream {live_id} successfully stopped.")
+    time.sleep(5)  # Tambahkan delay agar server streaming bisa memproses penghentian dengan baik
 
 def stop_all_active_streams():
     for live_id, info in live_info.items():
