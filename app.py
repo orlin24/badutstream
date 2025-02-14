@@ -132,24 +132,25 @@ def run_ffmpeg(live_id, info):
 def stop_stream_manually(live_id):
     logging.debug(f"Attempting to stop stream manually for live_id: {live_id}")
 
-    with process_lock:  # Pastikan hanya satu thread yang bisa mengakses `processes` sekaligus
-        process = processes.pop(live_id, None)  # Gunakan pop agar tidak error jika key tidak ada
+    with process_lock:
+        process = processes.pop(live_id, None)
 
-    if process:  # Jika proses ditemukan, hentikan
+    if process:
         os.killpg(os.getpgid(process.pid), signal.SIGTERM)
 
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)  # Paksa hentikan jika masih berjalan
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
             process.wait(timeout=10)
 
+    # Perbarui status live_info setelah proses dihentikan
     if live_id in live_info:
-        live_info[live_id]['status'] = 'Stopped'
+        live_info[live_id]['status'] = 'Stopped'  # Pastikan status diubah ke Stopped
         save_live_info()
 
     logging.debug(f"Stream {live_id} successfully stopped.")
-    time.sleep(5)  # Tambahkan delay agar server streaming bisa memproses penghentian dengan baik
+    time.sleep(5)
 
 def stop_all_active_streams():
     for live_id, info in live_info.items():
