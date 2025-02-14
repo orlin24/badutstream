@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+
 {% block content %}
 <div class="container mt-4">
     <!-- Header Section -->
@@ -231,7 +232,7 @@
     }
 
     // =====================
-    // UTILITY FUNCTIONS (SAMA SEBELUMNYA)
+    // UTILITY FUNCTIONS
     // =====================
     function getLiveIdFromURL() {
         return window.location.pathname.split('/').pop() || null;
@@ -262,7 +263,7 @@
     }
 
     // =====================
-    // ACTION HANDLERS (SAMA SEBELUMNYA)
+    // ACTION HANDLERS
     // =====================
     async function handleStopStream(liveId) {
         if (!confirm('Apakah Anda yakin ingin menghentikan stream ini?')) return;
@@ -300,7 +301,7 @@
     }
 
     // =====================
-    // UI HELPERS (SAMA SEBELUMNYA)
+    // UI HELPERS
     // =====================
     function copyToClipboard(text) {
         navigator.clipboard.writeText(text)
