@@ -80,6 +80,9 @@
     // RENDER FUNCTIONS
     // =====================
     function renderLiveInfo(data) {
+        const durationText = data.duration ? `${data.duration} menit` : "Tidak ada stop otomatis";
+        const bitrateText = data.bitrate ? `${data.bitrate} kbps` : "5000 kbps (Default)";
+
         const template = `
             <div class="row g-4">
                 <!-- Metadata Section -->
@@ -95,6 +98,12 @@
                             <dt class="col-sm-4">ID Stream</dt>
                             <dd class="col-sm-8">${data.id}</dd>
 
+                            <dt class="col-sm-4">Bitrate</dt>
+                            <dd class="col-sm-8">${bitrateText}</dd>
+
+                            <dt class="col-sm-4">Stop Otomatis</dt>
+                            <dd class="col-sm-8">${durationText}</dd>
+
                             <dt class="col-sm-4">Video Source</dt>
                             <dd class="col-sm-8">
                                 <span class="badge bg-info">${data.video_name}</span>
@@ -103,7 +112,7 @@
                     </div>
                 </div>
 
-                <!-- Status Section -->
+                <!-- Status & Schedule Section -->
                 <div class="col-md-6">
                     <div class="p-3 bg-dark rounded">
                         <h5 class="text-primary mb-3">
@@ -121,6 +130,25 @@
                                 <span class="text-warning">${data.startTime}</span>
                             </div>
                         </div>
+
+                        <hr class="my-4">
+
+                        <h5 class="text-primary mb-3">
+                            <i class="bi bi-clock-history me-2"></i>Atur Stop Otomatis
+                        </h5>
+                        <input 
+                            type="number" 
+                            id="durationInput" 
+                            class="form-control mb-2" 
+                            placeholder="Masukkan durasi dalam menit" 
+                            min="0"
+                        >
+                        <button 
+                            class="btn btn-warning w-100" 
+                            onclick="updateStopSchedule('${data.id}')"
+                        >
+                            <i class="bi bi-save me-2"></i>Simpan Jadwal Stop
+                        </button>
                     </div>
                 </div>
 
@@ -179,7 +207,31 @@
     }
 
     // =====================
-    // UTILITY FUNCTIONS
+    // NEW SCHEDULE FUNCTIONS
+    // =====================
+    async function updateStopSchedule(liveId) {
+        const duration = document.getElementById('durationInput').value;
+        if (!duration || duration < 0) {
+            showAlert('Masukkan durasi yang valid', 'danger');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/update_stop_schedule/${liveId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ duration: parseInt(duration) })
+            });
+            const data = await response.json();
+            showAlert(data.message, 'success');
+            loadLiveInfo(liveId);
+        } catch (error) {
+            showAlert('Gagal menyimpan jadwal stop', 'danger');
+        }
+    }
+
+    // =====================
+    // UTILITY FUNCTIONS (SAMA SEBELUMNYA)
     // =====================
     function getLiveIdFromURL() {
         return window.location.pathname.split('/').pop() || null;
@@ -210,7 +262,7 @@
     }
 
     // =====================
-    // ACTION HANDLERS
+    // ACTION HANDLERS (SAMA SEBELUMNYA)
     // =====================
     async function handleStopStream(liveId) {
         if (!confirm('Apakah Anda yakin ingin menghentikan stream ini?')) return;
@@ -248,7 +300,7 @@
     }
 
     // =====================
-    // UI HELPERS
+    // UI HELPERS (SAMA SEBELUMNYA)
     // =====================
     function copyToClipboard(text) {
         navigator.clipboard.writeText(text)
@@ -267,7 +319,6 @@
         
         document.getElementById('response').appendChild(alertBox);
 
-        // Hapus alert setelah 5 detik
         setTimeout(() => {
             alertBox.classList.remove('show');
             alertBox.classList.add('fade');
@@ -305,7 +356,6 @@
             </div>`;
     }
 
-    // Fungsi untuk menginisiasi tooltips
     function initTooltips() {
         const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
         tooltipTriggerList.map(tooltipTriggerEl => {
@@ -352,8 +402,14 @@
         border-color: #000000 !important;
     }
 
-    input[placeholder="Masukkan bitrate (dalam kbps)"]::placeholder {
-        color: #aaa !important; /* Buat placeholder lebih terang */
+    #durationInput {
+        background-color: #333;
+        border-color: #555;
+        color: white;
+    }
+
+    #durationInput::placeholder {
+        color: #888 !important;
     }
 </style>
 {% endblock %}
