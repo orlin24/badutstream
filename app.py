@@ -42,6 +42,39 @@ elif platform.system() == 'Darwin':  # Darwin adalah nama lain untuk macOS
 else:
     raise Exception("Unsupported operating system")
 
+# ==============================
+# 🔹 AUTHENTIKASI & LOGIN
+# ==============================
+
+users = {
+    "admin": "password123",
+}
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'username' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        if username in users and users[username] == password:
+            session['username'] = username
+            return redirect(url_for('index'))
+        else:
+            return render_template('login.html', error="Invalid username or password")
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.pop('username', None)
+    return redirect(url_for('login'))
+
 def load_uploaded_videos():
     if os.path.exists(videos_json_path):
         with open(videos_json_path, 'r') as file:
@@ -86,8 +119,9 @@ def check_and_update_scheduled_streams():
 def run_ffmpeg(live_id, info):
     try:
         logging.debug(f"Starting FFmpeg for live_id: {live_id} with info: {info}")
-        live_info[live_id]['status'] = 'Active'  # Perbarui status menjadi aktif
-        save_live_info()  # Simpan informasi streaming
+
+        live_info[live_id]['status'] = 'Active'  
+        save_live_info()  
 
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
@@ -107,22 +141,27 @@ def run_ffmpeg(live_id, info):
             text=True,
             bufsize=1,
             shell=True,
-            preexec_fn=os.setsid  # Pastikan bisa dihentikan dengan `os.killpg()`
+            preexec_fn=os.setsid  
         )
 
         processes[live_id] = process
         logging.debug(f"Running FFmpeg command: {ffmpeg_command}")
 
+        # **🔹 Perbaiki Stop Otomatis**
         if duration > 0:
             stop_time = datetime.now() + timedelta(minutes=duration)
-            threading.Timer((stop_time - datetime.now()).total_seconds(), stop_stream_manually, args=[live_id]).start()
+            delay = (stop_time - datetime.now()).total_seconds()
+            if delay > 5:  # Hanya set stop otomatis jika lebih dari 5 detik
+                threading.Timer(delay, stop_stream_manually, args=[live_id]).start()
+            else:
+                logging.warning(f"Skipping stop timer for {live_id} because duration is too short.")
 
         process.wait()
 
-    except Exception as e:  # Tambahkan ini untuk menangani error
+    except Exception as e:
         logging.error(f"FFmpeg error: {str(e)}")
 
-    finally:  # Tambahkan `finally` agar selalu dieksekusi, bahkan jika terjadi error
+    finally:
         if live_id in processes:
             del processes[live_id]
         live_info[live_id]['status'] = 'Stopped'
@@ -152,6 +191,22 @@ def stop_stream_manually(live_id):
     logging.debug(f"Stream {live_id} successfully stopped.")
     time.sleep(5)
 
+@app.route('/update_stop_schedule/<id>', methods=['POST'])
+@login_required
+def update_stop_schedule(id):
+    if id not in live_info:
+        return jsonify({'message': 'Stream tidak ditemukan!'}), 404
+
+    try:
+        data = request.json
+        duration = int(data.get('duration', 0))
+        live_info[id]['duration'] = duration
+        save_live_info()
+        return jsonify({'message': 'Jadwal stop otomatis diperbarui!'})
+    except Exception as e:
+        logging.error(f"Error: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+
 def stop_all_active_streams():
     for live_id, info in live_info.items():
         if info['status'] == 'Active':
@@ -160,19 +215,6 @@ def stop_all_active_streams():
 def periodic_check():
     check_and_update_scheduled_streams()
     threading.Timer(60, periodic_check).start()
-
-users = {
-    "gebang": "gebang",
-}
-
-# Login required decorator
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
 
 def format_size(size):
     """Convert file size to human-readable format."""
@@ -186,23 +228,6 @@ def get_file_name_from_google_drive_url(url):
     response = requests.get(url)
     soup = BeautifulSoup(response.text, 'html.parser')
     return soup.title.string.replace(" - Google Drive", "")
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        if username in users and users[username] == password:
-            session['username'] = username
-            return redirect(url_for('index'))
-        else:
-            return render_template('login.html', error="Invalid username or password")
-    return render_template('login.html')
-
-@app.route('/logout')
-def logout():
-    session.pop('username', None)
-    return redirect(url_for('login'))
 
 @app.route('/')
 @login_required
@@ -320,26 +345,21 @@ def restart_stream(id):
 
     try:
         info = live_info[id]
-        
-        # 1. Hentikan proses lama jika masih berjalan
+
+        # Hentikan proses lama
         if id in processes:
             old_process = processes[id]
-            if old_process.poll() is None:  # Proses masih aktif
+            if old_process.poll() is None:  
                 old_process.terminate()
                 old_process.wait(timeout=10)
             del processes[id]
 
-        # 2. Dapatkan parameter streaming
-        file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
-        stream_key = info['streamKey']
-        
-        # 3. Gunakan fungsi yang sama dengan start_stream
         logging.debug(f"Restarting stream {id}")
-        threading.Thread(target=run_ffmpeg, args=[id, info]).start()
-
-        # 4. Update waktu mulai
+        live_info[id]['status'] = 'Active'  # **Tambahkan ini**
         live_info[id]['startTime'] = datetime.now().isoformat()
         save_live_info()
+
+        threading.Thread(target=run_ffmpeg, args=[id, info]).start()
 
         return jsonify({'message': 'Stream berhasil di-restart!'})
 
