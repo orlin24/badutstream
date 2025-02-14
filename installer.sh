@@ -33,7 +33,7 @@ cd /var/www/html
 # Clone Repository dari GitHub
 # -------------------------------
 echo "Cloning repository..."
-git clone https://github.com/orlin24/badutsream.git
+git clone https://github.com/orlin24/badutstream.git
 # Asumsikan direktori hasil clone adalah "badutsream". Sesuaikan jika perlu.
 cd badutsream
 
