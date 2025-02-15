@@ -9,12 +9,10 @@ echo "Installing Nginx..."
 sudo apt install nginx -y
 sudo systemctl enable nginx
 
-# Konfigurasi Firewall
 echo "Configuring firewall..."
-sudo ufw allow OpenSSH
-sudo ufw allow 'Nginx Full'
-sudo ufw allow 1935/tcp
-sudo ufw allow 5000
+sudo ufw allow OpenSSH      # Mengizinkan akses SSH (port 22)
+sudo ufw allow 5000/tcp     # Jika ada aplikasi Python (Flask/FastAPI) di port 5000
+sudo ufw allow 1935/tcp     # Mengizinkan RTMP server
 echo "Enabling UFW..."
 echo "y" | sudo ufw enable
 
