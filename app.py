@@ -47,7 +47,7 @@ else:
 # ==============================
 
 users = {
-    "admin": "password123",
+    "gebang": "gebang",
 }
 
 def login_required(f):
