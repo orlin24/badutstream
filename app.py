@@ -91,6 +91,24 @@ def load_live_info():
             return json.load(file)
     return {}
 
+# Load data saat startup
+def load_data():
+    global uploaded_videos, live_info
+    if os.path.exists(videos_json_path):
+        with open(videos_json_path, 'r') as file:
+            uploaded_videos = json.load(file)
+    if os.path.exists(live_info_json_path):
+        with open(live_info_json_path, 'r') as file:
+            live_info = json.load(file)
+
+def restart_if_needed(live_id):
+    while True:
+        process = processes.get(live_id)
+        if process and process.poll() is not None:  # FFmpeg mati
+            logging.debug(f"FFmpeg mati, restart otomatis untuk live_id: {live_id}")
+            run_ffmpeg(live_id, live_info[live_id])
+        time.sleep(10)
+        
 def save_live_info():
     with open(live_info_json_path, 'w') as file:
         json.dump(live_info, file)
