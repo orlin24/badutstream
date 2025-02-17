@@ -16,6 +16,10 @@ import shlex
 import requests
 from bs4 import BeautifulSoup
 
+# Matikan log HTTP bawaan Flask
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)  # Hanya tampilkan error, tidak ada INFO atau DEBUG
+
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')  # Load from env
 CORS(app)  # Enable CORS for all routes
@@ -138,15 +142,17 @@ def run_ffmpeg(live_id, info):
     try:
         logging.debug(f"Starting FFmpeg for live_id: {live_id} with info: {info}")
 
-        live_info[live_id]['status'] = 'Active'  
-        save_live_info()  
+        # 🔹 Pastikan live_id masih ada sebelum update status
+        if live_id in live_info:
+            live_info[live_id]['status'] = 'Active'  
+            save_live_info()  
 
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
         bitrate = info.get('bitrate', '5000k')
         duration = int(info.get('duration', 0))
 
-        ffmpeg_command = f"{FFMPEG_PATH} -stream_loop -1 -re -i {shlex.quote(file_path)} " \
+        ffmpeg_command = f"{FFMPEG_PATH} -loglevel quiet -stream_loop -1 -re -i {shlex.quote(file_path)} " \
                          f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
                          f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
 
@@ -174,17 +180,42 @@ def run_ffmpeg(live_id, info):
             else:
                 logging.warning(f"Skipping stop timer for {live_id} because duration is too short.")
 
+        # **Mulai Monitoring**
+        threading.Thread(target=monitor_ffmpeg, args=[live_id], daemon=True).start()
+
         process.wait()
 
     except Exception as e:
         logging.error(f"FFmpeg error: {str(e)}")
 
     finally:
+        # 🔹 Pastikan live_id masih ada sebelum dihapus
         if live_id in processes:
             del processes[live_id]
-        live_info[live_id]['status'] = 'Stopped'
-        save_live_info()
+
+        if live_id in live_info:
+            live_info[live_id]['status'] = 'Stopped'
+            save_live_info()
+        
         log_file.close()
+
+def monitor_ffmpeg(live_id):
+    """Monitor FFmpeg process, restart if it crashes."""
+    while live_id in processes:
+        process = processes[live_id]
+
+        # Jika FFmpeg mati, restart setelah 10 detik
+        if process.poll() is not None:
+            logging.warning(f"FFmpeg untuk {live_id} crash! Restarting in 10 seconds...")
+            time.sleep(10)
+
+            # Cek ulang apakah masih perlu dijalankan
+            if live_id in live_info and live_info[live_id]['status'] == 'Active':
+                logging.info(f"Restarting FFmpeg for {live_id}")
+                threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
+                return  # Keluar dari loop setelah restart
+
+        time.sleep(10)  # Monitor setiap 10 detik
 
 def stop_stream_manually(live_id):
     logging.debug(f"Attempting to stop stream manually for live_id: {live_id}")
