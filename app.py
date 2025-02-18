@@ -203,8 +203,10 @@ def run_ffmpeg(live_id, info):
         bitrate = info.get('bitrate', '5000k')
         duration = int(info.get('duration', 0))
 
+        # Tambahkan opsi reconnect untuk FFmpeg
         ffmpeg_command = f"{FFMPEG_PATH} -loglevel quiet -stream_loop -1 -re -i {shlex.quote(file_path)} " \
                          f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
+                         f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 " \
                          f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
 
         log_file = open(f'ffmpeg_{live_id}.log', 'w')
@@ -223,7 +225,7 @@ def run_ffmpeg(live_id, info):
         logging.debug(f"Running FFmpeg command: {ffmpeg_command}")
 
         # **🔹 Perbaiki Stop Otomatis**
-        if duration > 0:
+        if duration > 0:  # Hanya atur timer jika duration > 0
             stop_time = datetime.now() + timedelta(minutes=duration)
             delay = (stop_time - datetime.now()).total_seconds()
             if delay > 5:  # Hanya set stop otomatis jika lebih dari 5 detik
@@ -246,19 +248,19 @@ def run_ffmpeg(live_id, info):
         if live_id in processes:
             del processes[live_id]
 
-        if live_id in live_info:
-            live_info[live_id]['status'] = 'Stopped'
-            save_live_info()
+        # Jangan ubah status live menjadi "Stopped" kecuali ada perintah stop dari aplikasi
+        if live_id in live_info and live_info[live_id]['status'] == 'Active':
+            logging.debug(f"FFmpeg stopped, but live status remains Active for live_id: {live_id}")
         
         log_file.close()
 
 def monitor_ffmpeg(live_id):
     """Monitor FFmpeg process, restart if it crashes."""
-    while live_id in processes:
-        process = processes[live_id]
+    while live_id in live_info and live_info[live_id]['status'] == 'Active':
+        process = processes.get(live_id)
 
         # Jika FFmpeg mati, restart setelah 10 detik
-        if process.poll() is not None:
+        if process and process.poll() is not None:
             logging.warning(f"FFmpeg untuk {live_id} crash! Restarting in 10 seconds...")
             time.sleep(10)
 
