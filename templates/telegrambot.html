@@ -1,0 +1,138 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <div class="card shadow-lg bg-dark text-white">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="card-title mb-0">
+                        <i class="fas fa-robot"></i> Telegram Bot Settings
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <form id="telegramBotForm">
+                        <!-- Bot Token Input -->
+                        <div class="form-group">
+                            <label for="botToken" class="font-weight-bold">
+                                <i class="fas fa-key"></i> Bot Token
+                            </label>
+                            <div class="input-group">
+                                <input type="password" class="form-control bg-dark text-white" id="botToken" name="botToken" value="{{ botToken }}" placeholder="Masukkan Bot Token" required>
+                                <div class="input-group-append">
+                                    <button class="btn btn-outline-secondary" type="button" id="toggleBotToken">
+                                        <i class="fas fa-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <small class="form-text text-muted">
+                                Masukkan token bot Telegram Anda.
+                            </small>
+                        </div>
+
+                        <!-- Chat ID Input -->
+                        <div class="form-group">
+                            <label for="chatId" class="font-weight-bold">
+                                <i class="fas fa-comment"></i> Chat ID
+                            </label>
+                            <div class="input-group">
+                                <input type="password" class="form-control bg-dark text-white" id="chatId" name="chatId" value="{{ chatId }}" placeholder="Masukkan Chat ID" required>
+                                <div class="input-group-append">
+                                    <button class="btn btn-outline-secondary" type="button" id="toggleChatId">
+                                        <i class="fas fa-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <small class="form-text text-muted">
+                                Masukkan ID chat Telegram Anda.
+                            </small>
+                        </div>
+
+                        <!-- Save Button -->
+                        <button type="submit" class="btn btn-primary btn-block">
+                            <i class="fas fa-save"></i> Save Settings
+                        </button>
+                    </form>
+
+                    <!-- Tutorial Section -->
+                    <div class="mt-4">
+                        <h5 class="text-white">
+                            <i class="fas fa-info-circle"></i> Cara Mendapatkan Bot Token dan Chat ID
+                        </h5>
+                        <ul class="list-unstyled">
+                            <li class="mb-2">
+                                <i class="fas fa-arrow-right"></i>
+                                <strong>Bot Token:</strong> Dapatkan dari 
+                                <a href="https://t.me/BotFather" target="_blank" class="text-primary">@BotFather</a>.
+                            </li>
+                            <li>
+                                <i class="fas fa-arrow-right"></i>
+                                <strong>Chat ID:</strong> Dapatkan dari 
+                                <a href="https://t.me/ChatidTelegramBot" target="_blank" class="text-primary">@ChatidTelegramBot</a>.
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tambahkan Font Awesome untuk ikon -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+
+<!-- Tambahkan jQuery -->
+<script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+
+<!-- Tambahkan Bootstrap JS (opsional, untuk efek interaktif) -->
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    $(document).ready(function() {
+        // Toggle visibility for Bot Token
+        $('#toggleBotToken').click(function() {
+            const botTokenInput = $('#botToken');
+            const icon = $(this).find('i');
+            if (botTokenInput.attr('type') === 'password') {
+                botTokenInput.attr('type', 'text');
+                icon.removeClass('fa-eye').addClass('fa-eye-slash');
+            } else {
+                botTokenInput.attr('type', 'password');
+                icon.removeClass('fa-eye-slash').addClass('fa-eye');
+            }
+        });
+
+        // Toggle visibility for Chat ID
+        $('#toggleChatId').click(function() {
+            const chatIdInput = $('#chatId');
+            const icon = $(this).find('i');
+            if (chatIdInput.attr('type') === 'password') {
+                chatIdInput.attr('type', 'text');
+                icon.removeClass('fa-eye').addClass('fa-eye-slash');
+            } else {
+                chatIdInput.attr('type', 'password');
+                icon.removeClass('fa-eye-slash').addClass('fa-eye');
+            }
+        });
+
+        // Form submission
+        $('#telegramBotForm').on('submit', function(e) {
+            e.preventDefault();
+            $.ajax({
+                url: '/set_telegram_bot',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    botToken: $('#botToken').val(),
+                    chatId: $('#chatId').val()
+                }),
+                success: function(response) {
+                    alert('Settings saved successfully!');
+                },
+                error: function(xhr, status, error) {
+                    alert('Failed to save settings: ' + error);
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}
