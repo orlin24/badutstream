@@ -12,6 +12,7 @@ import gdown
 import platform
 import logging
 import signal
+import locale
 import shlex
 import requests
 from bs4 import BeautifulSoup
@@ -23,6 +24,8 @@ log.setLevel(logging.ERROR)  # Hanya tampilkan error, tidak ada INFO atau DEBUG
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')  # Load from env
 CORS(app)  # Enable CORS for all routes
+
+# Tambahkan variabel global untuk menyimpan bot token dan chat ID
 
 # Konfigurasi logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -37,6 +40,29 @@ os.makedirs(uploads_dir, exist_ok=True)
 
 videos_json_path = os.path.join(uploads_dir, 'videos.json')
 live_info_json_path = os.path.join(uploads_dir, 'live_info.json')
+apibot_json_path = os.path.join(uploads_dir, 'apibot.json')
+
+# Definisikan fungsi load_apibot_settings dan save_apibot_settings di sini
+def load_apibot_settings():
+    """Memuat pengaturan bot dari file apibot.json."""
+    if os.path.exists(apibot_json_path):
+        with open(apibot_json_path, 'r') as file:
+            return json.load(file)
+    return {}
+
+def save_apibot_settings(bot_token, chat_id):
+    """Menyimpan pengaturan bot ke file apibot.json."""
+    settings = {
+        'botToken': bot_token,
+        'chatId': chat_id
+    }
+    with open(apibot_json_path, 'w') as file:
+        json.dump(settings, file)
+
+# Baru setelah ini panggil load_apibot_settings()
+telegram_bot_settings = load_apibot_settings()
+telegram_bot_token = telegram_bot_settings.get('botToken')
+telegram_chat_id = telegram_bot_settings.get('chatId')
 
 # Tentukan path FFmpeg berdasarkan sistem operasi
 if platform.system() == 'Linux':
@@ -94,7 +120,7 @@ def load_live_info():
         with open(live_info_json_path, 'r') as file:
             return json.load(file)
     return {}
-
+        
 # Load data saat startup
 def load_data():
     global uploaded_videos, live_info
@@ -127,6 +153,25 @@ def update_active_streams():
             info['status'] = 'Stopped'
     save_live_info()
 
+@app.template_filter('datetime')
+def format_datetime(value):
+    try:
+        # Set locale ke English untuk format bulan (Feb, Mar, dll)
+        locale.setlocale(locale.LC_TIME, 'en_US.UTF-8')
+        
+        # Parsing tanggal dari dua format yang mungkin:
+        if 'T' in value:
+            dt = datetime.strptime(value, "%Y-%m-%dT%H:%M")
+        else:
+            dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+            
+        # Format ke "18-Feb-2025 23:27"
+        return dt.strftime("%d-%b-%Y %H:%M")
+    
+    except Exception as e:
+        logging.error(f"Error formatting date: {str(e)}")
+        return value  # Kembalikan nilai asli jika gagal
+    
 def check_and_update_scheduled_streams():
     current_time = datetime.now()
     for live_id, info in live_info.items():
@@ -141,6 +186,12 @@ def check_and_update_scheduled_streams():
 def run_ffmpeg(live_id, info):
     try:
         logging.debug(f"Starting FFmpeg for live_id: {live_id} with info: {info}")
+
+        # 🔹 KIRIM NOTIFIKASI LIVE AKTIF
+        if live_info[live_id]['status'] == 'Scheduled':
+            send_telegram_notification(f"🎥 Live terjadwal '{info['title']}' TELAH DIMULAI!")
+        else:
+            send_telegram_notification(f"🎥 Live '{info['title']}' TELAH AKTIF!")
 
         # 🔹 Pastikan live_id masih ada sebelum update status
         if live_id in live_info:
@@ -176,7 +227,9 @@ def run_ffmpeg(live_id, info):
             stop_time = datetime.now() + timedelta(minutes=duration)
             delay = (stop_time - datetime.now()).total_seconds()
             if delay > 5:  # Hanya set stop otomatis jika lebih dari 5 detik
-                threading.Timer(delay, stop_stream_manually, args=[live_id]).start()
+                # Tambahkan is_scheduled=True saat memanggil stop_stream_manually
+                threading.Timer(delay, stop_stream_manually, args=[live_id, True]).start()
+                send_telegram_notification(f"⏳ Live terjadwal '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
             else:
                 logging.warning(f"Skipping stop timer for {live_id} because duration is too short.")
 
@@ -217,7 +270,7 @@ def monitor_ffmpeg(live_id):
 
         time.sleep(10)  # Monitor setiap 10 detik
 
-def stop_stream_manually(live_id):
+def stop_stream_manually(live_id, is_scheduled=False):
     logging.debug(f"Attempting to stop stream manually for live_id: {live_id}")
 
     with process_lock:
@@ -236,6 +289,15 @@ def stop_stream_manually(live_id):
     if live_id in live_info:
         live_info[live_id]['status'] = 'Stopped'  # Pastikan status diubah ke Stopped
         save_live_info()
+
+    # 🔹 UPDATE NOTIFIKASI STOP
+    title = live_info[live_id]['title']
+    if is_scheduled:
+        message = f"⏰ Live terjadwal '{title}' BERHENTI sesuai jadwal"
+    else:
+        message = f"⛔ Live '{title}' DIHENTIKAN manual"
+    
+    send_telegram_notification(message)
 
     logging.debug(f"Stream {live_id} successfully stopped.")
     time.sleep(5)
@@ -320,8 +382,10 @@ def start_stream():
             schedule_time = datetime.strptime(schedule_date, "%Y-%m-%dT%H:%M")
             delay = max(0, (schedule_time - datetime.now()).total_seconds())
             threading.Timer(delay, run_ffmpeg, args=[live_id, live_info[live_id]]).start()
+            send_telegram_notification(f"✅ Live terjadwal '{title}' akan dimulai pada {schedule_date}.")
         else:
             threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
+            send_telegram_notification(f"✅ Live '{title}' telah dimulai.")
 
         return jsonify({
             'message': 'Stream scheduled' if schedule_date else 'Stream started',
@@ -339,7 +403,7 @@ def stop_stream(id):
         return jsonify({'message': 'Stream not found'}), 404
 
     try:
-        stop_stream_manually(id)
+        stop_stream_manually(id)  # Tidak perlu is_scheduled di sini
         return jsonify({'message': 'Streaming berhasil dihentikan'})
     except Exception as e:
         logging.error(f"Stop error: {str(e)}")
@@ -450,9 +514,28 @@ def live_info_page(id):
 def get_live_info(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
+    
     info = live_info[id]
-    info['id'] = id  # Add ID to the data to be returned
-    info['video_name'] = info['video'].split('_', 1)[-1]  # Extract the original name without the unique ID
+    info['id'] = id
+    info['video_name'] = info['video'].split('_', 1)[-1]
+
+    try:
+        # Atur locale ke English untuk bulan dalam format 'Feb'
+        locale.setlocale(locale.LC_TIME, 'en_US.UTF-8')
+        
+        # Handle kedua format: "2025-02-18T23:27" DAN "2025-02-18 23:27:00"
+        if 'T' in info['startTime']:
+            dt = datetime.strptime(info['startTime'], "%Y-%m-%dT%H:%M")
+        else:
+            dt = datetime.strptime(info['startTime'], "%Y-%m-%d %H:%M:%S")
+        
+        # Format ke "18-Feb-2025 23:27"
+        info['formatted_start'] = dt.strftime("%d-%b-%Y %H:%M")
+    
+    except Exception as e:
+        logging.error(f"Error formatting date: {str(e)}")
+        info['formatted_start'] = info['startTime']  # Fallback ke format asli
+    
     return jsonify(info)
 
 @app.route('/all_live_info')
@@ -570,6 +653,43 @@ def delete_video():
 
 if not os.path.exists(uploads_dir):
     os.makedirs(uploads_dir)
+
+def send_telegram_notification(message):
+    """Mengirim notifikasi ke Telegram jika bot token dan chat ID tersedia."""
+    settings = load_apibot_settings()
+    bot_token = settings.get('botToken')
+    chat_id = settings.get('chatId')
+
+    if bot_token and chat_id:
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": message
+        }
+        try:
+            response = requests.post(url, json=payload)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to send Telegram notification: {e}")
+
+@app.route('/set_telegram_bot', methods=['POST'])
+@login_required
+def set_telegram_bot():
+    data = request.json
+    bot_token = data.get('botToken')
+    chat_id = data.get('chatId')
+
+    if not bot_token or not chat_id:
+        return jsonify({'message': 'Bot token and chat ID are required!'}), 400
+
+    save_apibot_settings(bot_token, chat_id)
+    return jsonify({'message': 'Telegram bot settings saved successfully!'})
+
+@app.route('/telegram_bot')
+@login_required
+def telegram_bot():
+    settings = load_apibot_settings()
+    return render_template('telegrambot.html', botToken=settings.get('botToken', ''), chatId=settings.get('chatId', ''))
 
 # Ensure that all active streams are marked as stopped on startup
 stop_all_active_streams()
