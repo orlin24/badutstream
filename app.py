@@ -203,11 +203,10 @@ def run_ffmpeg(live_id, info):
         bitrate = info.get('bitrate', '5000k')
         duration = int(info.get('duration', 0))
 
-        # Tambahkan opsi reconnect untuk FFmpeg
+        # Di fungsi run_ffmpeg, ubah command menjadi:
         ffmpeg_command = f"{FFMPEG_PATH} -loglevel quiet -stream_loop -1 -re -i {shlex.quote(file_path)} " \
-                         f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
-                         f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 " \
-                         f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
+                 f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
+                 f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
 
         log_file = open(f'ffmpeg_{live_id}.log', 'w')
 
@@ -234,9 +233,6 @@ def run_ffmpeg(live_id, info):
                 send_telegram_notification(f"⏳ Live terjadwal '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
             else:
                 logging.warning(f"Skipping stop timer for {live_id} because duration is too short.")
-
-        # **Mulai Monitoring**
-        threading.Thread(target=monitor_ffmpeg, args=[live_id], daemon=True).start()
 
         process.wait()
 
@@ -452,6 +448,7 @@ def stream_logs(id):
     
     return jsonify({'logs': logs})
 
+# Pada fungsi restart_stream, ubah menjadi:
 @app.route('/restart_stream/<id>', methods=['POST'])
 @login_required
 def restart_stream(id):
@@ -460,22 +457,18 @@ def restart_stream(id):
 
     try:
         info = live_info[id]
-
-        # Hentikan proses lama
+        
+        # Hentikan proses lama jika ada
         if id in processes:
             old_process = processes[id]
-            if old_process.poll() is None:  
+            if old_process.poll() is None:
                 old_process.terminate()
                 old_process.wait(timeout=10)
             del processes[id]
 
-        logging.debug(f"Restarting stream {id}")
-        live_info[id]['status'] = 'Active'  # **Tambahkan ini**
-        live_info[id]['startTime'] = datetime.now().isoformat()
-        save_live_info()
-
+        # Mulai stream baru dengan parameter sama
         threading.Thread(target=run_ffmpeg, args=[id, info]).start()
-
+        
         return jsonify({'message': 'Stream berhasil di-restart!'})
 
     except Exception as e:
