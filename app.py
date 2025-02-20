@@ -200,7 +200,7 @@ def run_ffmpeg(live_id, info):
 
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
-        bitrate = info.get('bitrate', '5000k')
+        bitrate = info.get('bitrate', '2500k')
         duration = int(info.get('duration', 0))
 
         # Di fungsi run_ffmpeg, ubah command menjadi:
