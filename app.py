@@ -250,24 +250,6 @@ def run_ffmpeg(live_id, info):
         
         log_file.close()
 
-def monitor_ffmpeg(live_id):
-    """Monitor FFmpeg process, restart if it crashes."""
-    while live_id in live_info and live_info[live_id]['status'] == 'Active':
-        process = processes.get(live_id)
-
-        # Jika FFmpeg mati, restart setelah 10 detik
-        if process and process.poll() is not None:
-            logging.warning(f"FFmpeg untuk {live_id} crash! Restarting in 10 seconds...")
-            time.sleep(10)
-
-            # Cek ulang apakah masih perlu dijalankan
-            if live_id in live_info and live_info[live_id]['status'] == 'Active':
-                logging.info(f"Restarting FFmpeg for {live_id}")
-                threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
-                return  # Keluar dari loop setelah restart
-
-        time.sleep(10)  # Monitor setiap 10 detik
-
 def stop_stream_manually(live_id, is_scheduled=False):
     logging.debug(f"Attempting to stop stream manually for live_id: {live_id}")
 
