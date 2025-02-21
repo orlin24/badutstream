@@ -22,7 +22,7 @@ log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)  # Hanya tampilkan error, tidak ada INFO atau DEBUG
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')  # Load from env
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'e3f1a2b4c6d8e0f9a7b5c3d1e9f2a4c6d8b0e1f3a5c7d9e2b4c6d8a0f1e3b5')  # Load from env
 CORS(app)  # Enable CORS for all routes
 
 # Tambahkan variabel global untuk menyimpan bot token dan chat ID
@@ -200,7 +200,7 @@ def run_ffmpeg(live_id, info):
 
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
-        bitrate = info.get('bitrate', '2500k')
+        bitrate = info.get('bitrate', '5000k')
         duration = int(info.get('duration', 0))
 
         # Di fungsi run_ffmpeg, ubah command menjadi:
