@@ -64,3 +64,7 @@ tmux new-session -d -s badutstream "cd $(pwd) && source venv/bin/activate && pyt
 IP=$(hostname -I | awk '{print $1}')
 
 echo "Application started. Access it via: http://$IP:5000"
+
+# Menghapus installer setelah instalasi selesai
+echo "Installation completed. Removing installer script..."
+rm -- "$0"
