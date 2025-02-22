@@ -25,8 +25,6 @@ app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'e3f1a2b4c6d8e0f9a7b5c3d1e9f2a4c6d8b0e1f3a5c7d9e2b4c6d8a0f1e3b5')  # Load from env
 CORS(app)  # Enable CORS for all routes
 
-# Tambahkan variabel global untuk menyimpan bot token dan chat ID
-
 # Konfigurasi logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -131,14 +129,32 @@ def load_data():
         with open(live_info_json_path, 'r') as file:
             live_info = json.load(file)
 
-def restart_if_needed(live_id):
+def restart_if_needed():
+    restart_counts = {}  # Dictionary untuk melacak jumlah restart
     while True:
-        process = processes.get(live_id)
-        if process and process.poll() is not None:  # FFmpeg mati
-            logging.debug(f"FFmpeg mati, restart otomatis untuk live_id: {live_id}")
-            run_ffmpeg(live_id, live_info[live_id])
-        time.sleep(10)
-        
+        with process_lock:
+            for live_id in list(processes.keys()):
+                process = processes.get(live_id)
+                if process and process.poll() is not None:  # Proses sudah mati
+                    if live_id in live_info and live_info[live_id]['status'] == 'Active':
+                        restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
+                        if restart_counts[live_id] <= 5:  # Batas 5 restart
+                            logging.debug(f"Restarting live_id: {live_id} (attempt {restart_counts[live_id]})")
+                            del processes[live_id]
+                            threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
+                            send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' mati dan direstart (percobaan {restart_counts[live_id]})")
+                        else:
+                            live_info[live_id]['status'] = 'Stopped'
+                            save_live_info()
+                            send_telegram_notification(f"❌ Live '{live_info[live_id]['title']}' gagal setelah 5 restart.")
+                elif live_id in live_info and live_info[live_id]['status'] == 'Active' and live_id not in processes:
+                    restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
+                    if restart_counts[live_id] <= 5:
+                        logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
+                        threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
+                        send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (percobaan {restart_counts[live_id]})")
+        time.sleep(10)  # Cek setiap 10 detik
+
 def save_live_info():
     with open(live_info_json_path, 'w') as file:
         json.dump(live_info, file)
@@ -156,22 +172,16 @@ def update_active_streams():
 @app.template_filter('datetime')
 def format_datetime(value):
     try:
-        # Set locale ke English untuk format bulan (Feb, Mar, dll)
         locale.setlocale(locale.LC_TIME, 'en_US.UTF-8')
-        
-        # Parsing tanggal dari dua format yang mungkin:
         if 'T' in value:
             dt = datetime.strptime(value, "%Y-%m-%dT%H:%M")
         else:
             dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-            
-        # Format ke "18-Feb-2025 23:27"
         return dt.strftime("%d-%b-%Y %H:%M")
-    
     except Exception as e:
         logging.error(f"Error formatting date: {str(e)}")
-        return value  # Kembalikan nilai asli jika gagal
-    
+        return value
+
 def check_and_update_scheduled_streams():
     current_time = datetime.now()
     for live_id, info in live_info.items():
@@ -186,101 +196,78 @@ def check_and_update_scheduled_streams():
 def run_ffmpeg(live_id, info):
     try:
         logging.debug(f"Starting FFmpeg for live_id: {live_id} with info: {info}")
-
-        # 🔹 KIRIM NOTIFIKASI LIVE AKTIF
         if live_info[live_id]['status'] == 'Scheduled':
             send_telegram_notification(f"🎥 Live terjadwal '{info['title']}' TELAH DIMULAI!")
         else:
             send_telegram_notification(f"🎥 Live '{info['title']}' TELAH AKTIF!")
 
-        # 🔹 Pastikan live_id masih ada sebelum update status
         if live_id in live_info:
-            live_info[live_id]['status'] = 'Active'  
-            save_live_info()  
+            live_info[live_id]['status'] = 'Active'
+            save_live_info()
 
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
         bitrate = info.get('bitrate', '5000k')
         duration = int(info.get('duration', 0))
 
-        # Di fungsi run_ffmpeg, ubah command menjadi:
+        # Tambahkan parameter untuk memastikan koneksi RTMP ditutup dengan benar
         ffmpeg_command = f"{FFMPEG_PATH} -loglevel quiet -stream_loop -1 -re -i {shlex.quote(file_path)} " \
-                 f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
-                 f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
+                         f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
+                         f"-flvflags no_duration_filesize " \
+                         f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
 
-        log_file = open(f'ffmpeg_{live_id}.log', 'w')
+        # Arahkan output ke /dev/null (Linux/macOS) atau NUL (Windows) untuk menghindari file log
+        if platform.system() == 'Windows':
+            DEV_NULL = 'NUL'
+        else:
+            DEV_NULL = '/dev/null'
 
         process = subprocess.Popen(
             ffmpeg_command,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.DEVNULL,  # Arahkan stdout ke /dev/null atau NUL
+            stderr=subprocess.DEVNULL,  # Arahkan stderr ke /dev/null atau NUL
             text=True,
             bufsize=1,
             shell=True,
-            preexec_fn=os.setsid  
+            preexec_fn=os.setsid if platform.system() != 'Windows' else None
         )
-
         processes[live_id] = process
-        logging.debug(f"Running FFmpeg command: {ffmpeg_command}")
 
-        # **🔹 Perbaiki Stop Otomatis**
-        if duration > 0:  # Hanya atur timer jika duration > 0
+        if duration > 0:
             stop_time = datetime.now() + timedelta(minutes=duration)
             delay = (stop_time - datetime.now()).total_seconds()
-            if delay > 5:  # Hanya set stop otomatis jika lebih dari 5 detik
-                # Tambahkan is_scheduled=True saat memanggil stop_stream_manually
-                threading.Timer(delay, stop_stream_manually, args=[live_id, True]).start()
-                send_telegram_notification(f"⏳ Live terjadwal '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
-            else:
-                logging.warning(f"Skipping stop timer for {live_id} because duration is too short.")
+            if delay > 5:
+                threading.Timer(delay, stop_stream_manually, args=[live_id, True, True]).start()
+                send_telegram_notification(f"⏳ Live '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
 
         process.wait()
 
     except Exception as e:
         logging.error(f"FFmpeg error: {str(e)}")
 
-    finally:
-        # 🔹 Pastikan live_id masih ada sebelum dihapus
-        if live_id in processes:
-            del processes[live_id]
-
-        # Jangan ubah status live menjadi "Stopped" kecuali ada perintah stop dari aplikasi
-        if live_id in live_info and live_info[live_id]['status'] == 'Active':
-            logging.debug(f"FFmpeg stopped, but live status remains Active for live_id: {live_id}")
-        
-        log_file.close()
-
-def stop_stream_manually(live_id, is_scheduled=False):
-    logging.debug(f"Attempting to stop stream manually for live_id: {live_id}")
-
+def stop_stream_manually(live_id, is_scheduled=False, force=False):
+    logging.debug(f"Attempting to stop stream manually for live_id: {live_id}, force={force}")
     with process_lock:
         process = processes.pop(live_id, None)
 
-    if process:
+    if process and process.poll() is None:
         os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-
         try:
-            process.wait(timeout=10)
+            process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            process.wait(timeout=10)
+            process.wait(timeout=5)
 
-    # Perbarui status live_info setelah proses dihentikan
+        if force and process.poll() is None:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+
     if live_id in live_info:
-        live_info[live_id]['status'] = 'Stopped'  # Pastikan status diubah ke Stopped
+        live_info[live_id]['status'] = 'Stopped'
         save_live_info()
 
-    # 🔹 UPDATE NOTIFIKASI STOP
     title = live_info[live_id]['title']
-    if is_scheduled:
-        message = f"⏰ Live terjadwal '{title}' BERHENTI sesuai jadwal"
-    else:
-        message = f"⛔ Live '{title}' DIHENTIKAN manual"
-    
+    message = f"⏰ Live terjadwal '{title}' BERHENTI sesuai jadwal" if is_scheduled else f"⛔ Live '{title}' DIHENTIKAN manual"
     send_telegram_notification(message)
-
-    logging.debug(f"Stream {live_id} successfully stopped.")
-    time.sleep(5)
 
 @app.route('/update_stop_schedule/<id>', methods=['POST'])
 @login_required
@@ -293,6 +280,14 @@ def update_stop_schedule(id):
         duration = int(data.get('duration', 0))
         live_info[id]['duration'] = duration
         save_live_info()
+
+        if id in processes and duration > 0:
+            stop_time = datetime.now() + timedelta(minutes=duration)
+            delay = (stop_time - datetime.now()).total_seconds()
+            if delay > 5:
+                threading.Timer(delay, stop_stream_manually, args=[id, True, True]).start()
+                send_telegram_notification(f"⏳ Live '{live_info[id]['title']}' diperbarui, akan berhenti dalam {duration} menit.")
+
         return jsonify({'message': 'Jadwal stop otomatis diperbarui!'})
     except Exception as e:
         logging.error(f"Error: {str(e)}")
@@ -301,14 +296,13 @@ def update_stop_schedule(id):
 def stop_all_active_streams():
     for live_id, info in live_info.items():
         if info['status'] == 'Active':
-            stop_stream_manually(live_id)
+            stop_stream_manually(live_id, force=True)
 
 def periodic_check():
     check_and_update_scheduled_streams()
     threading.Timer(60, periodic_check).start()
 
 def format_size(size):
-    """Convert file size to human-readable format."""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024:
             return f"{size:.2f} {unit}"
@@ -335,7 +329,7 @@ def start_stream():
         stream_key = data.get('streamKey')
         schedule_date = data.get('scheduleDate')
         bitrate = data.get('bitrate')
-        duration = data.get('duration')  # Durasi dalam menit
+        duration = data.get('duration')
 
         if not all([title, video_filename, stream_key]):
             return jsonify({'message': 'Missing parameters'}), 400
@@ -344,9 +338,7 @@ def start_stream():
         if not video:
             return jsonify({'message': 'Video not found'}), 404
 
-        file_path = os.path.abspath(os.path.join(uploads_dir, video_filename))
         live_id = str(uuid.uuid4())
-
         live_info[live_id] = {
             'title': title,
             'video': video_filename,
@@ -354,7 +346,7 @@ def start_stream():
             'status': 'Scheduled' if schedule_date else 'Pending',
             'startTime': schedule_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'bitrate': f'{bitrate}k' if bitrate else '5000k',
-            'duration': int(duration) if duration else 0  # Default to 0 (unlimited) if duration is not set
+            'duration': int(duration) if duration else 0
         }
         save_live_info()
 
@@ -383,7 +375,7 @@ def stop_stream(id):
         return jsonify({'message': 'Stream not found'}), 404
 
     try:
-        stop_stream_manually(id)  # Tidak perlu is_scheduled di sini
+        stop_stream_manually(id, force=True)
         return jsonify({'message': 'Streaming berhasil dihentikan'})
     except Exception as e:
         logging.error(f"Stop error: {str(e)}")
@@ -400,20 +392,17 @@ def update_bitrate(id):
         if not bitrate:
             return jsonify({'message': 'Bitrate is required'}), 400
 
-        # Update bitrate in live_info
         live_info[id]['bitrate'] = f'{bitrate}k'
         save_live_info()
 
-        # Restart the stream to apply the new bitrate
         if id in processes:
             process = processes[id]
             process.terminate()
             process.wait(timeout=10)
             del processes[id]
-            logging.debug(f"Restarting stream {id} with new bitrate {bitrate}k")
             threading.Thread(target=run_ffmpeg, args=[id, live_info[id]]).start()
 
-        return jsonify({'message': 'Bitrate updated successfully! Stream restarted to apply new bitrate.'})
+        return jsonify({'message': 'Bitrate updated successfully! Stream restarted.'})
     except Exception as e:
         logging.error(f"Error: {str(e)}")
         return jsonify({'message': f'Error: {str(e)}'}), 500
@@ -430,7 +419,6 @@ def stream_logs(id):
     
     return jsonify({'logs': logs})
 
-# Pada fungsi restart_stream, ubah menjadi:
 @app.route('/restart_stream/<id>', methods=['POST'])
 @login_required
 def restart_stream(id):
@@ -439,8 +427,6 @@ def restart_stream(id):
 
     try:
         info = live_info[id]
-        
-        # Hentikan proses lama jika ada
         if id in processes:
             old_process = processes[id]
             if old_process.poll() is None:
@@ -448,9 +434,7 @@ def restart_stream(id):
                 old_process.wait(timeout=10)
             del processes[id]
 
-        # Mulai stream baru dengan parameter sama
         threading.Thread(target=run_ffmpeg, args=[id, info]).start()
-        
         return jsonify({'message': 'Stream berhasil di-restart!'})
 
     except Exception as e:
@@ -460,7 +444,6 @@ def restart_stream(id):
 @app.route('/delete_stream/<id>', methods=['POST'])
 @login_required
 def delete_stream(id):
-    logging.debug(f"Received request to delete stream with ID: {id}")
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
 
@@ -473,7 +456,6 @@ def delete_stream(id):
 
         del live_info[id]
         save_live_info()
-
         return jsonify({'message': 'Streaming deleted successfully!'})
     except Exception as e:
         logging.error(f"Error: {str(e)}")
@@ -495,24 +477,16 @@ def get_live_info(id):
     info = live_info[id]
     info['id'] = id
     info['video_name'] = info['video'].split('_', 1)[-1]
-
     try:
-        # Atur locale ke English untuk bulan dalam format 'Feb'
         locale.setlocale(locale.LC_TIME, 'en_US.UTF-8')
-        
-        # Handle kedua format: "2025-02-18T23:27" DAN "2025-02-18 23:27:00"
         if 'T' in info['startTime']:
             dt = datetime.strptime(info['startTime'], "%Y-%m-%dT%H:%M")
         else:
             dt = datetime.strptime(info['startTime'], "%Y-%m-%d %H:%M:%S")
-        
-        # Format ke "18-Feb-2025 23:27"
         info['formatted_start'] = dt.strftime("%d-%b-%Y %H:%M")
-    
     except Exception as e:
         logging.error(f"Error formatting date: {str(e)}")
-        info['formatted_start'] = info['startTime']  # Fallback ke format asli
-    
+        info['formatted_start'] = info['startTime']
     return jsonify(info)
 
 @app.route('/all_live_info')
@@ -530,31 +504,19 @@ def live_list():
 def upload_video():
     if request.method == 'POST':
         try:
-            # Get Google Drive file URL from request
             file_url = request.json['file_url']
-            logging.debug(f"Received file_url: {file_url}")
-
-            # Get the original file name from Google Drive URL
             original_name = get_file_name_from_google_drive_url(file_url)
             unique_filename = f"{uuid.uuid4()}_{original_name}"
             file_path = os.path.join(uploads_dir, unique_filename)
-            
-            # Use URL or file ID to download with gdown
             gdown.download(url=file_url, output=file_path, quiet=False, fuzzy=True)
-            logging.debug(f"Saving file to: {file_path}")
 
-            # Get file size
             file_size = os.path.getsize(file_path)
-
-            # Add the uploaded video to the list
             uploaded_videos.append({
                 'filename': unique_filename,
                 'original_name': original_name,
                 'size': format_size(file_size),
                 'upload_date': datetime.now().strftime("%Y-%m-%d")
             })
-
-            # Save the uploaded videos to the JSON file
             save_uploaded_videos()
 
             return jsonify({
@@ -583,13 +545,11 @@ def rename_video():
     try:
         old_filename = request.json['old_filename']
         new_filename = request.json['new_filename']
-
         if not new_filename.lower().endswith(".mp4"):
             new_filename += ".mp4"
 
         old_file_path = os.path.join(uploads_dir, old_filename)
         new_file_path = os.path.join(uploads_dir, new_filename)
-
         os.rename(old_file_path, new_file_path)
 
         for video in uploaded_videos:
@@ -599,7 +559,6 @@ def rename_video():
                 break
 
         save_uploaded_videos()
-
         return jsonify({
             'success': True,
             'message': 'Video renamed successfully!',
@@ -615,12 +574,10 @@ def delete_video():
     try:
         filename = request.json['filename']
         file_path = os.path.join(uploads_dir, filename)
-
         os.remove(file_path)
 
         global uploaded_videos
         uploaded_videos = [video for video in uploaded_videos if video['filename'] != filename]
-
         save_uploaded_videos()
 
         return jsonify({'success': True, 'message': 'Video deleted successfully!', 'videos': uploaded_videos})
@@ -632,17 +589,12 @@ if not os.path.exists(uploads_dir):
     os.makedirs(uploads_dir)
 
 def send_telegram_notification(message):
-    """Mengirim notifikasi ke Telegram jika bot token dan chat ID tersedia."""
     settings = load_apibot_settings()
     bot_token = settings.get('botToken')
     chat_id = settings.get('chatId')
-
     if bot_token and chat_id:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": message
-        }
+        payload = {"chat_id": chat_id, "text": message}
         try:
             response = requests.post(url, json=payload)
             response.raise_for_status()
@@ -655,7 +607,6 @@ def set_telegram_bot():
     data = request.json
     bot_token = data.get('botToken')
     chat_id = data.get('chatId')
-
     if not bot_token or not chat_id:
         return jsonify({'message': 'Bot token and chat ID are required!'}), 400
 
@@ -668,11 +619,14 @@ def telegram_bot():
     settings = load_apibot_settings()
     return render_template('telegrambot.html', botToken=settings.get('botToken', ''), chatId=settings.get('chatId', ''))
 
-# Ensure that all active streams are marked as stopped on startup
+# Pastikan semua streaming aktif ditandai sebagai stopped saat startup
 stop_all_active_streams()
 
-# Start periodic check for scheduled streams
+# Mulai pengecekan berkala untuk streaming terjadwal
 periodic_check()
+
+# Jalankan monitoring untuk restart otomatis
+threading.Thread(target=restart_if_needed, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
