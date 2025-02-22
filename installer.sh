@@ -7,9 +7,9 @@ sudo apt update && sudo apt upgrade -y
 
 # Konfigurasi Firewall
 echo "Configuring firewall..."
-sudo ufw allow OpenSSH      # Mengizinkan akses SSH (port 22)
-sudo ufw allow 5000/tcp     # Untuk aplikasi Python (Flask/FastAPI) di port 5000
-sudo ufw allow 1935/tcp     # Untuk RTMP server
+sudo ufw allow OpenSSH  # Mengizinkan akses SSH (port 22)
+sudo ufw allow 5000/tcp  # Untuk aplikasi Python (Flask/FastAPI) di port 5000
+sudo ufw allow 1935/tcp  # Untuk RTMP server
 echo "Enabling UFW..."
 echo "y" | sudo ufw enable
 
@@ -56,14 +56,11 @@ else
     echo "requirements.txt not found. Skipping dependency installation."
 fi
 
-# -------------------------------
 # Jalankan Aplikasi di dalam tmux session (default: badutstream)
-# -------------------------------
 echo "Starting application in tmux session 'badutstream'..."
 tmux new-session -d -s badutstream "cd $(pwd) && source venv/bin/activate && python3 app.py; exec bash"
-echo "Application started in tmux session 'badutstream'."
-echo "Untuk attach session, jalankan: tmux attach-session -t badutstream"
 
-# Jika ingin menjalankan aplikasi di terminal utama, aktifkan baris berikut
-# echo "Starting application in current terminal..."
-# python3 app.py
+# Mendapatkan IP VPS
+IP=$(hostname -I | awk '{print $1}')
+
+echo "Application started. Access it via: http://$IP:5000"
