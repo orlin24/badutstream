@@ -75,7 +75,7 @@ else:
 # ==============================
 
 users = {
-    "gebang": "gebang",
+    "admin": "admin",
 }
 
 def login_required(f):
@@ -207,7 +207,7 @@ def run_ffmpeg(live_id, info):
 
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
-        bitrate = info.get('bitrate', '2500k')
+        bitrate = info.get('bitrate', '5000k')
         duration = int(info.get('duration', 0))
 
         # Tambahkan parameter untuk memastikan koneksi RTMP ditutup dengan benar
