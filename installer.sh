@@ -5,6 +5,9 @@ set -e  # Menghentikan script jika ada perintah yang gagal
 echo "Updating and upgrading system..."
 sudo apt update && sudo apt upgrade -y
 
+# Install Git
+apt install git -y
+
 # Konfigurasi Firewall
 echo "Configuring firewall..."
 sudo ufw allow OpenSSH  # Mengizinkan akses SSH (port 22)
