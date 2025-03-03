@@ -1,208 +1,257 @@
-{% extends "layout.html" %}
-{% block content %}
+{% extends "layout.html" %} {% block content %}
 <div class="container mt-4">
-    <!-- Header Section -->
-    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start mb-4">
-        <h1 class="text-primary mb-3 mb-md-0">
-            <i class="bi bi-collection-play me-2"></i>Manajemen Live Stream
-        </h1>
-        <div class="d-flex flex-column align-items-end">
-            <div class="text-secondary mb-2">
-                <i class="bi bi-clock-history me-2"></i>
-                <span id="currentDateTime" class="fst-italic"></span>
-            </div>
-            <div class="d-flex gap-2">
-                <button class="btn btn-sm btn-outline-secondary" onclick="refreshPage()">
-                    <i class="bi bi-arrow-clockwise"></i>
-                </button>
-            </div>
-        </div>
+  <!-- Header Section -->
+  <div
+    class="d-flex flex-column flex-md-row justify-content-between align-items-start mb-4"
+  >
+    <h1 class="text-primary mb-3 mb-md-0">
+      <i class="bi bi-collection-play me-2"></i>Manajemen Live Stream
+    </h1>
+    <div class="d-flex flex-column align-items-end">
+      <div class="mb-2">
+        <i class="bi bi-clock-history me-2" style="color: yellow"></i>
+        <span
+          id="currentDateTime"
+          class="fst-italic"
+          style="color: yellow"
+        ></span>
+      </div>
     </div>
+  </div>
 
-    <!-- Filter Section -->
-    <div class="row g-3 mb-4">
-        <div class="col-md-8">
-            <div class="input-group shadow-sm">
-                <span class="input-group-text bg-dark border-dark text-secondary">
-                    <i class="bi bi-search"></i>
-                </span>
-                <input 
-                    type="search" 
-                    class="form-control bg-dark text-light border-dark" 
-                    id="searchInput" 
-                    placeholder="Cari berdasarkan judul stream..."
-                >
-            </div>
+  <!-- Filter Section -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-8">
+      <div class="input-group shadow-sm">
+        <span class="input-group-text bg-dark border-dark text-secondary">
+          <i class="bi bi-search"></i>
+        </span>
+        <input
+          type="search"
+          class="form-control bg-dark text-light border-dark"
+          id="searchInput"
+          placeholder="Cari berdasarkan judul stream..."
+        />
+      </div>
+    </div>
+    <div class="col-md-4">
+      <select
+        class="form-select bg-dark text-light border-dark shadow-sm"
+        id="statusFilter"
+      >
+        <option value="all">Semua Status</option>
+        <option value="active">Sedang Live</option>
+        <option value="scheduled">Terjadwal</option>
+        <option value="stopped">Selesai</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Stream Groups -->
+  <div class="row row-cols-1 row-cols-lg-3 g-4">
+    <!-- Active Streams -->
+    <div class="col">
+      <div class="card border-success border-opacity-25 h-100 shadow-lg">
+        <div
+          class="card-header bg-success bg-opacity-10 d-flex justify-content-between align-items-center"
+        >
+          <h5 class="mb-0 text-success">
+            <i class="bi bi-broadcast-pin me-2"></i>Aktif
+          </h5>
+          <span
+            class="badge bg-success bg-opacity-25 text-success"
+            id="activeLiveCount"
+            >0</span
+          >
         </div>
-        <div class="col-md-4">
-            <select 
-                class="form-select bg-dark text-light border-dark shadow-sm" 
-                id="statusFilter"
+        <div class="card-body p-2">
+          <div class="list-group list-group-flush" id="activeLiveList">
+            {% for id, info in lives.items() if info['status'] == 'Active' %}
+            <a
+              href="/live_info/{{ id }}"
+              class="list-group-item list-group-item-action bg-dark text-light border-secondary live-item"
+              data-status="active"
             >
-                <option value="all">Semua Status</option>
-                <option value="active">Sedang Live</option>
-                <option value="scheduled">Terjadwal</option>
-                <option value="stopped">Selesai</option>
-            </select>
+              <div class="d-flex justify-content-between align-items-start">
+                <div class="me-2">
+                  <h6 class="mb-1 text-truncate">{{ info['title'] }}</h6>
+                  <small class="text-secondary">{{ info['startTime'] }}</small>
+                </div>
+                <i class="bi bi-chevron-right text-secondary"></i>
+              </div>
+            </a>
+            {% else %}
+            <div class="text-center py-3 text-secondary" id="noActiveStreams">
+              <i class="bi bi-info-circle me-2"></i>Tidak ada stream aktif
+            </div>
+            {% endfor %}
+          </div>
         </div>
+      </div>
     </div>
 
-    <!-- Stream Groups -->
-    <div class="row row-cols-1 row-cols-lg-3 g-4">
-        <!-- Active Streams -->
-        <div class="col">
-            <div class="card border-success border-opacity-25 h-100 shadow-lg">
-                <div class="card-header bg-success bg-opacity-10 d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0 text-success">
-                        <i class="bi bi-broadcast-pin me-2"></i>Aktif
-                    </h5>
-                    <span class="badge bg-success bg-opacity-25 text-success" id="activeLiveCount">0</span>
-                </div>
-                <div class="card-body p-2">
-                    <div class="list-group list-group-flush" id="activeLiveList">
-                        {% for id, info in lives.items() if info['status'] == 'Active' %}
-                        <a href="/live_info/{{ id }}" class="list-group-item list-group-item-action bg-dark text-light border-secondary live-item" data-status="active">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="me-2">
-                                    <h6 class="mb-1 text-truncate">{{ info['title'] }}</h6>
-                                    <small class="text-secondary">{{ info['startTime'] }}</small>
-                                </div>
-                                <i class="bi bi-chevron-right text-secondary"></i>
-                            </div>
-                        </a>
-                        {% else %}
-                        <div class="text-center py-3 text-secondary" id="noActiveStreams">
-                            <i class="bi bi-info-circle me-2"></i>Tidak ada stream aktif
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
+    <!-- Scheduled Streams -->
+    <div class="col">
+      <div class="card border-warning border-opacity-25 h-100 shadow-lg">
+        <div
+          class="card-header bg-warning bg-opacity-10 d-flex justify-content-between align-items-center"
+        >
+          <h5 class="mb-0 text-warning">
+            <i class="bi bi-calendar-event me-2"></i>Terjadwal
+          </h5>
+          <span
+            class="badge bg-warning bg-opacity-25 text-warning"
+            id="scheduledLiveCount"
+            >0</span
+          >
         </div>
-
-        <!-- Scheduled Streams -->
-        <div class="col">
-            <div class="card border-warning border-opacity-25 h-100 shadow-lg">
-                <div class="card-header bg-warning bg-opacity-10 d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0 text-warning">
-                        <i class="bi bi-calendar-event me-2"></i>Terjadwal
-                    </h5>
-                    <span class="badge bg-warning bg-opacity-25 text-warning" id="scheduledLiveCount">0</span>
+        <div class="card-body p-2">
+          <div class="list-group list-group-flush" id="scheduledLiveList">
+            {% for id, info in lives.items() if info['status'] == 'Scheduled' %}
+            <a
+              href="/live_info/{{ id }}"
+              class="list-group-item list-group-item-action bg-dark text-light border-secondary live-item"
+              data-status="scheduled"
+            >
+              <div class="d-flex justify-content-between align-items-start">
+                <div class="me-2">
+                  <h6 class="mb-1 text-truncate">{{ info['title'] }}</h6>
+                  <small class="text-secondary">{{ info['startTime'] }}</small>
                 </div>
-                <div class="card-body p-2">
-                    <div class="list-group list-group-flush" id="scheduledLiveList">
-                        {% for id, info in lives.items() if info['status'] == 'Scheduled' %}
-                        <a href="/live_info/{{ id }}" class="list-group-item list-group-item-action bg-dark text-light border-secondary live-item" data-status="scheduled">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="me-2">
-                                    <h6 class="mb-1 text-truncate">{{ info['title'] }}</h6>
-                                    <small class="text-secondary">{{ info['startTime'] }}</small>
-                                </div>
-                                <i class="bi bi-chevron-right text-secondary"></i>
-                            </div>
-                        </a>
-                        {% else %}
-                        <div class="text-center py-3 text-secondary" id="noScheduledStreams">
-                            <i class="bi bi-info-circle me-2"></i>Tidak ada jadwal
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
+                <i class="bi bi-chevron-right text-secondary"></i>
+              </div>
+            </a>
+            {% else %}
+            <div
+              class="text-center py-3 text-secondary"
+              id="noScheduledStreams"
+            >
+              <i class="bi bi-info-circle me-2"></i>Tidak ada jadwal
             </div>
+            {% endfor %}
+          </div>
         </div>
-
-        <!-- Stopped Streams -->
-        <div class="col">
-            <div class="card border-danger border-opacity-25 h-100 shadow-lg">
-                <div class="card-header bg-danger bg-opacity-10 d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0 text-danger">
-                        <i class="bi bi-stop-circle me-2"></i>Selesai
-                    </h5>
-                    <span class="badge bg-danger bg-opacity-25 text-danger" id="stoppedLiveCount">0</span>
-                </div>
-                <div class="card-body p-2">
-                    <div class="list-group list-group-flush" id="stoppedLiveList">
-                        {% for id, info in lives.items() if info['status'] == 'Stopped' %}
-                        <a href="/live_info/{{ id }}" class="list-group-item list-group-item-action bg-dark text-light border-secondary live-item" data-status="stopped">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="me-2">
-                                    <h6 class="mb-1 text-truncate">{{ info['title'] }}</h6>
-                                    <small class="text-secondary">{{ info['startTime'] }}</small>
-                                </div>
-                                <i class="bi bi-chevron-right text-secondary"></i>
-                            </div>
-                        </a>
-                        {% else %}
-                        <div class="text-center py-3 text-secondary" id="noStoppedStreams">
-                            <i class="bi bi-info-circle me-2"></i>Tidak ada riwayat
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
-        </div>
+      </div>
     </div>
+
+    <!-- Stopped Streams -->
+    <div class="col">
+      <div class="card border-danger border-opacity-25 h-100 shadow-lg">
+        <div
+          class="card-header bg-danger bg-opacity-10 d-flex justify-content-between align-items-center"
+        >
+          <h5 class="mb-0 text-danger">
+            <i class="bi bi-stop-circle me-2"></i>Selesai
+          </h5>
+          <span
+            class="badge bg-danger bg-opacity-25 text-danger"
+            id="stoppedLiveCount"
+            >0</span
+          >
+        </div>
+        <div class="card-body p-2">
+          <div class="list-group list-group-flush" id="stoppedLiveList">
+            {% for id, info in lives.items() if info['status'] == 'Stopped' %}
+            <a
+              href="/live_info/{{ id }}"
+              class="list-group-item list-group-item-action bg-dark text-light border-secondary live-item"
+              data-status="stopped"
+            >
+              <div class="d-flex justify-content-between align-items-start">
+                <div class="me-2">
+                  <h6 class="mb-1 text-truncate">{{ info['title'] }}</h6>
+                  <small class="text-secondary">{{ info['startTime'] }}</small>
+                </div>
+                <i class="bi bi-chevron-right text-secondary"></i>
+              </div>
+            </a>
+            {% else %}
+            <div class="text-center py-3 text-secondary" id="noStoppedStreams">
+              <i class="bi bi-info-circle me-2"></i>Tidak ada riwayat
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
-    // =====================
-    // INITIALIZATION
-    // =====================
-    document.addEventListener('DOMContentLoaded', () => {
-        initializeDateTime();
-        updateLiveCounts();
-        setupEventListeners();
-        startPolling();
-    });
+  // =====================
+  // INITIALIZATION
+  // =====================
+  document.addEventListener("DOMContentLoaded", () => {
+    initializeDateTime();
+    updateLiveCounts();
+    setupEventListeners();
+    startPolling();
+  });
 
-    // =====================
-    // CORE FUNCTIONS
-    // =====================
-    function initializeDateTime() {
-        const options = { 
-            weekday: 'long', 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric', 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        };
-        document.getElementById('currentDateTime').textContent = 
-            new Date().toLocaleDateString('id-ID', options);
-    }
+  // =====================
+  // CORE FUNCTIONS
+  // =====================
+  function initializeDateTime() {
+    const updateTime = () => {
+      const options = {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      };
+      document.getElementById("currentDateTime").textContent =
+        new Date().toLocaleDateString("id-ID", options);
+    };
 
-    function updateLiveCounts() {
-        const counters = {
-            active: document.querySelectorAll('#activeLiveList .live-item').length,
-            scheduled: document.querySelectorAll('#scheduledLiveList .live-item').length,
-            stopped: document.querySelectorAll('#stoppedLiveList .live-item').length
-        };
-        
-        document.getElementById('activeLiveCount').textContent = counters.active;
-        document.getElementById('scheduledLiveCount').textContent = counters.scheduled;
-        document.getElementById('stoppedLiveCount').textContent = counters.stopped;
+    // Panggil sekali saat inisialisasi
+    updateTime();
+    // Perbarui setiap detik
+    setInterval(updateTime, 1000);
+  }
 
-        document.getElementById('noActiveStreams').style.display = counters.active ? 'none' : 'block';
-        document.getElementById('noScheduledStreams').style.display = counters.scheduled ? 'none' : 'block';
-        document.getElementById('noStoppedStreams').style.display = counters.stopped ? 'none' : 'block';
-    }
+  function updateLiveCounts() {
+    const counters = {
+      active: document.querySelectorAll("#activeLiveList .live-item").length,
+      scheduled: document.querySelectorAll("#scheduledLiveList .live-item")
+        .length,
+      stopped: document.querySelectorAll("#stoppedLiveList .live-item").length,
+    };
 
-    function updateLiveLists(lives) {
-        const activeLiveList = document.getElementById('activeLiveList');
-        const scheduledLiveList = document.getElementById('scheduledLiveList');
-        const stoppedLiveList = document.getElementById('stoppedLiveList');
+    document.getElementById("activeLiveCount").textContent = counters.active;
+    document.getElementById("scheduledLiveCount").textContent =
+      counters.scheduled;
+    document.getElementById("stoppedLiveCount").textContent = counters.stopped;
 
-        activeLiveList.innerHTML = '';
-        scheduledLiveList.innerHTML = '';
-        stoppedLiveList.innerHTML = '';
+    document.getElementById("noActiveStreams").style.display = counters.active
+      ? "none"
+      : "block";
+    document.getElementById("noScheduledStreams").style.display =
+      counters.scheduled ? "none" : "block";
+    document.getElementById("noStoppedStreams").style.display = counters.stopped
+      ? "none"
+      : "block";
+  }
 
-        for (const [id, info] of Object.entries(lives)) {
-            const listItem = document.createElement('a');
-            listItem.href = `/live_info/${id}`;
-            listItem.className = 'list-group-item list-group-item-action bg-dark text-light border-secondary live-item';
-            listItem.dataset.status = info.status;
+  function updateLiveLists(lives) {
+    const activeLiveList = document.getElementById("activeLiveList");
+    const scheduledLiveList = document.getElementById("scheduledLiveList");
+    const stoppedLiveList = document.getElementById("stoppedLiveList");
 
-            const itemContent = `
+    activeLiveList.innerHTML = "";
+    scheduledLiveList.innerHTML = "";
+    stoppedLiveList.innerHTML = "";
+
+    for (const [id, info] of Object.entries(lives)) {
+      const listItem = document.createElement("a");
+      listItem.href = `/live_info/${id}`;
+      listItem.className =
+        "list-group-item list-group-item-action bg-dark text-light border-secondary live-item";
+      listItem.dataset.status = info.status;
+
+      const itemContent = `
                 <div class="d-flex justify-content-between align-items-start">
                     <div class="me-2">
                         <h6 class="mb-1 text-truncate">${info.title}</h6>
@@ -211,131 +260,134 @@
                     <i class="bi bi-chevron-right text-secondary"></i>
                 </div>
             `;
-            listItem.innerHTML = itemContent;
+      listItem.innerHTML = itemContent;
 
-            if (info.status === 'Active') {
-                activeLiveList.appendChild(listItem);
-            } else if (info.status === 'Scheduled') {
-                scheduledLiveList.appendChild(listItem);
-            } else if (info.status === 'Stopped') {
-                stoppedLiveList.appendChild(listItem);
-            }
-        }
-
-        updateLiveCounts();
-        handleFilter();
+      if (info.status === "Active") {
+        activeLiveList.appendChild(listItem);
+      } else if (info.status === "Scheduled") {
+        scheduledLiveList.appendChild(listItem);
+      } else if (info.status === "Stopped") {
+        stoppedLiveList.appendChild(listItem);
+      }
     }
 
-    function startPolling() {
-        setInterval(() => {
-            fetch('/all_live_info')
-                .then(response => response.json())
-                .then(data => {
-                    updateLiveLists(data);
-                })
-                .catch(error => console.error('Error fetching live info:', error));
-        }, 5000); // Polling interval: 5 seconds
-    }
+    updateLiveCounts();
+    handleFilter();
+  }
 
-    // =====================
-    // FILTERING SYSTEM
-    // =====================
-    function setupEventListeners() {
-        const searchInput = document.getElementById('searchInput');
-        const statusFilter = document.getElementById('statusFilter');
-        
-        searchInput.addEventListener('input', handleFilter);
-        statusFilter.addEventListener('change', handleFilter);
-    }
+  function startPolling() {
+    setInterval(() => {
+      fetch("/all_live_info")
+        .then((response) => response.json())
+        .then((data) => {
+          updateLiveLists(data);
+        })
+        .catch((error) => console.error("Error fetching live info:", error));
+    }, 5000); // Polling interval: 5 seconds
+  }
 
-    function handleFilter() {
-        const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-        const statusFilter = document.getElementById('statusFilter').value;
-        
-        document.querySelectorAll('.live-item').forEach(item => {
-            const title = item.querySelector('h6').textContent.toLowerCase();
-            const status = item.dataset.status;
-            const matchesSearch = title.includes(searchTerm);
-            const matchesStatus = statusFilter === 'all' || statusFilter === status;
-            
-            item.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
-        });
-        
-        updateVisibleCounts();
-    }
+  // =====================
+  // FILTERING SYSTEM
+  // =====================
+  function setupEventListeners() {
+    const searchInput = document.getElementById("searchInput");
+    const statusFilter = document.getElementById("statusFilter");
 
-    function updateVisibleCounts() {
-        const visibleCount = selector => 
-            document.querySelectorAll(`${selector} .live-item:not([style*="none"])`).length;
-        
-        document.getElementById('activeLiveCount').textContent = 
-            visibleCount('#activeLiveList');
-        document.getElementById('scheduledLiveCount').textContent = 
-            visibleCount('#scheduledLiveList');
-        document.getElementById('stoppedLiveCount').textContent = 
-            visibleCount('#stoppedLiveList');
-    }
+    searchInput.addEventListener("input", handleFilter);
+    statusFilter.addEventListener("change", handleFilter);
+  }
 
-    // =====================
-    // UTILITY FUNCTIONS
-    // =====================
-    function refreshPage() {
-        window.location.reload();
-    }
+  function handleFilter() {
+    const searchTerm = document
+      .getElementById("searchInput")
+      .value.toLowerCase();
+    const statusFilter = document.getElementById("statusFilter").value;
 
-    // =====================
-    // ENHANCEMENTS
-    // =====================
-    document.querySelectorAll('.list-group-item').forEach(item => {
-        item.addEventListener('mouseenter', () => {
-            item.style.transform = 'translateX(5px)';
-            item.style.transition = 'transform 0.2s ease';
-        });
-        
-        item.addEventListener('mouseleave', () => {
-            item.style.transform = 'translateX(0)';
-        });
+    document.querySelectorAll(".live-item").forEach((item) => {
+      const title = item.querySelector("h6").textContent.toLowerCase();
+      const status = item.dataset.status;
+      const matchesSearch = title.includes(searchTerm);
+      const matchesStatus = statusFilter === "all" || statusFilter === status;
+
+      item.style.display = matchesSearch && matchesStatus ? "" : "none";
     });
+
+    updateVisibleCounts();
+  }
+
+  function updateVisibleCounts() {
+    const visibleCount = (selector) =>
+      document.querySelectorAll(`${selector} .live-item:not([style*="none"])`)
+        .length;
+
+    document.getElementById("activeLiveCount").textContent =
+      visibleCount("#activeLiveList");
+    document.getElementById("scheduledLiveCount").textContent =
+      visibleCount("#scheduledLiveList");
+    document.getElementById("stoppedLiveCount").textContent =
+      visibleCount("#stoppedLiveList");
+  }
+
+  // =====================
+  // UTILITY FUNCTIONS
+  // =====================
+  function refreshPage() {
+    window.location.reload();
+  }
+
+  // =====================
+  // ENHANCEMENTS
+  // =====================
+  document.querySelectorAll(".list-group-item").forEach((item) => {
+    item.addEventListener("mouseenter", () => {
+      item.style.transform = "translateX(5px)";
+      item.style.transition = "transform 0.2s ease";
+    });
+
+    item.addEventListener("mouseleave", () => {
+      item.style.transform = "translateX(0)";
+    });
+  });
 </script>
 
 <style>
-    .card {
-        background-color: #1a1a1a;
-        border-radius: 12px;
-        transition: transform 0.3s ease;
-    }
-    
-    .card:hover {
-        transform: translateY(-3px);
-    }
-    
-    .list-group-item {
-        background-color: #1a1a1a;
-        border-color: #2d2d2d;
-        transition: all 0.2s ease;
-    }
-    
-    .list-group-item:hover {
-        background-color: #2d2d2d;
-    }
-    
-    .form-control:focus {
-        background-color: #2d2d2d;
-        border-color: #0066cc;
-        box-shadow: 0 0 0 0.25rem rgba(0, 102, 204, 0.25);
-    }
-    
-    ::-webkit-scrollbar {
-        width: 8px;
-    }
-    
-    ::-webkit-scrollbar-track {
-        background: #1a1a1a;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background: #2d2d2d;
-        border-radius: 4px;
-    }
+  .card {
+    background-color: #1a1a1a;
+    border-radius: 12px;
+    transition: transform 0.3s ease;
+  }
+
+  .card:hover {
+    transform: translateY(-3px);
+  }
+
+  .list-group-item {
+    background-color: #1a1a1a;
+    border-color: #2d2d2d;
+    transition: all 0.2s ease;
+  }
+
+  .list-group-item:hover {
+    background-color: #2d2d2d;
+  }
+
+  .form-control:focus {
+    background-color: #2d2d2d;
+    border-color: #0066cc;
+    box-shadow: 0 0 0 0.25rem rgba(0, 102, 204, 0.25);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #1a1a1a;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #2d2d2d;
+    border-radius: 4px;
+  }
 </style>
 {% endblock %}
