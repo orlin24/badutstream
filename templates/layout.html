@@ -1,333 +1,399 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=5.0"
+    />
     <title>{{ title }}</title>
     <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.8.1/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.8.1/font/bootstrap-icons.min.css"
+      rel="stylesheet"
+    />
     <style>
-        :root {
-            --bg-dark: #121212;
-            --bg-secondary: #1e1e1e;
-            --text-primary: #e0e0e0;
-            --text-secondary: #b0b0b0;
-            --border-color: #2d2d2d;
-            --primary-color: #0066cc;
-            --hover-primary: #0052a3;
-            --danger-color: #dc3545;
-            --success-color: #28a745;
-        }
+      :root {
+        --bg-dark: #121212;
+        --bg-secondary: #1e1e1e;
+        --text-primary: #e0e0e0;
+        --text-secondary: #b0b0b0;
+        --border-color: #2d2d2d;
+        --primary-color: #0066cc;
+        --hover-primary: #0052a3;
+        --danger-color: #dc3545;
+        --success-color: #28a745;
+      }
 
-        body {
-            background-color: var(--bg-dark);
-            color: var(--text-primary);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            padding-top: 60px;
-        }
+      body {
+        background-color: var(--bg-dark);
+        color: var(--text-primary);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        padding-top: 60px;
+      }
 
-        .navbar {
-            background-color: var(--bg-secondary) !important;
-            border-bottom: 1px solid var(--border-color);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-            z-index: 1000;
-        }
+      .navbar {
+        background-color: var(--bg-secondary) !important;
+        border-bottom: 1px solid var(--border-color);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        z-index: 1000;
+      }
 
+      .navbar-brand {
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+
+      .navbar-brand img {
+        filter: invert(0.8);
+        transition: filter 0.3s ease;
+      }
+
+      .navbar-brand:hover img {
+        filter: invert(1);
+      }
+
+      .nav-link {
+        color: var(--text-primary) !important;
+        padding: 0.75rem 1.25rem !important;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+      }
+
+      .nav-link.active,
+      .nav-link:hover {
+        background-color: rgba(255, 255, 255, 0.05);
+        transform: translateY(-1px);
+      }
+
+      .dropdown-menu {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      }
+
+      .dropdown-item {
+        color: var(--text-primary);
+        transition: all 0.2s ease;
+      }
+
+      .dropdown-item:hover {
+        background-color: rgba(255, 255, 255, 0.05);
+        color: var(--primary-color);
+      }
+
+      .container {
+        flex: 1;
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+      }
+
+      .card {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+      }
+
+      .card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      }
+
+      .form-control {
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border-color);
+        color: var(--text-primary);
+        transition: all 0.3s ease;
+      }
+
+      .form-control:focus {
+        background-color: rgba(255, 255, 255, 0.08);
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 0.25rem rgba(0, 102, 204, 0.25);
+      }
+
+      .form-label {
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+
+      .btn-primary {
+        background-color: var(--primary-color);
+        border: none;
+        padding: 0.75rem 1.5rem;
+        font-weight: 500;
+        transition: all 0.3s ease;
+      }
+
+      .btn-primary:hover {
+        background-color: var(--hover-primary);
+        transform: translateY(-1px);
+      }
+
+      .alert {
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border-color);
+        border-left: 4px solid var(--primary-color);
+      }
+
+      .list-group-item {
+        background-color: var(--bg-secondary);
+        color: var(--text-primary);
+        border-color: var(--border-color);
+      }
+
+      .modal-content {
+        background-color: var(--bg-secondary);
+        color: var(--text-primary);
+        border: 1px solid var(--border-color);
+      }
+
+      .progress {
+        background-color: rgba(255, 255, 255, 0.05);
+      }
+
+      .table {
+        --bs-table-color: var(--text-primary);
+        --bs-table-bg: var(--bg-secondary);
+        --bs-table-border-color: var(--border-color);
+      }
+
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: var(--bg-dark);
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: var(--bg-secondary);
+        border-radius: 4px;
+      }
+
+      .floating-button {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 60px;
+        height: 60px;
+        background-color: var(--primary-color);
+        color: white;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        cursor: pointer;
+        z-index: 1000;
+        font-size: 24px;
+      }
+
+      .floating-button:hover {
+        background-color: var(--hover-primary);
+      }
+
+      .floating-button.live-list {
+        bottom: 90px;
+      }
+
+      .floating-button.upload-video {
+        bottom: 160px;
+      }
+
+      @media (max-width: 768px) {
         .navbar-brand {
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }
-
-        .navbar-brand img {
-            filter: invert(0.8);
-            transition: filter 0.3s ease;
-        }
-
-        .navbar-brand:hover img {
-            filter: invert(1);
+          font-size: 1.1rem;
         }
 
         .nav-link {
-            color: var(--text-primary) !important;
-            padding: 0.75rem 1.25rem !important;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-        }
-
-        .nav-link.active,
-        .nav-link:hover {
-            background-color: rgba(255, 255, 255, 0.05);
-            transform: translateY(-1px);
-        }
-
-        .dropdown-menu {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-        }
-
-        .dropdown-item {
-            color: var(--text-primary);
-            transition: all 0.2s ease;
-        }
-
-        .dropdown-item:hover {
-            background-color: rgba(255, 255, 255, 0.05);
-            color: var(--primary-color);
+          padding: 0.5rem 1rem !important;
+          margin: 0.25rem 0;
         }
 
         .container {
-            flex: 1;
-            padding-top: 2rem;
-            padding-bottom: 2rem;
+          padding: 1rem;
         }
 
         .card {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        .card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+          border-radius: 8px;
         }
 
         .form-control {
-            background-color: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            transition: all 0.3s ease;
-        }
-
-        .form-control:focus {
-            background-color: rgba(255, 255, 255, 0.08);
-            border-color: var(--primary-color);
-            box-shadow: 0 0 0 0.25rem rgba(0, 102, 204, 0.25);
-        }
-
-        .form-label {
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-
-        .btn-primary {
-            background-color: var(--primary-color);
-            border: none;
-            padding: 0.75rem 1.5rem;
-            font-weight: 500;
-            transition: all 0.3s ease;
-        }
-
-        .btn-primary:hover {
-            background-color: var(--hover-primary);
-            transform: translateY(-1px);
-        }
-
-        .alert {
-            background-color: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-color);
-            border-left: 4px solid var(--primary-color);
-        }
-
-        .list-group-item {
-            background-color: var(--bg-secondary);
-            color: var(--text-primary);
-            border-color: var(--border-color);
-        }
-
-        .modal-content {
-            background-color: var(--bg-secondary);
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-        }
-
-        .progress {
-            background-color: rgba(255, 255, 255, 0.05);
-        }
-
-        .table {
-            --bs-table-color: var(--text-primary);
-            --bs-table-bg: var(--bg-secondary);
-            --bs-table-border-color: var(--border-color);
-        }
-
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: var(--bg-dark);
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: var(--bg-secondary);
-            border-radius: 4px;
+          padding: 0.75rem;
         }
 
         .floating-button {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 60px;
-            height: 60px;
-            background-color: var(--primary-color);
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-            cursor: pointer;
-            z-index: 1000;
-            font-size: 24px;
+          width: 50px;
+          height: 50px;
+          font-size: 20px;
         }
 
-        .floating-button:hover {
-            background-color: var(--hover-primary);
+        .floating-button.live-list {
+          bottom: 80px;
         }
 
-        @media (max-width: 768px) {
-            .navbar-brand {
-                font-size: 1.1rem;
-            }
-            
-            .nav-link {
-                padding: 0.5rem 1rem !important;
-                margin: 0.25rem 0;
-            }
-            
-            .container {
-                padding: 1rem;
-            }
-            
-            .card {
-                border-radius: 8px;
-            }
-            
-            .form-control {
-                padding: 0.75rem;
-            }
+        .floating-button.upload-video {
+          bottom: 140px;
+        }
+      }
+
+      @media (max-width: 576px) {
+        .navbar-brand img {
+          height: 30px;
         }
 
-        @media (max-width: 576px) {
-            .navbar-brand img {
-                height: 30px;
-            }
-            
-            .dropdown-menu {
-                min-width: 200px;
-            }
-            
-            .btn-primary {
-                width: 100%;
-                margin-top: 1rem;
-            }
+        .dropdown-menu {
+          min-width: 200px;
         }
+
+        .btn-primary {
+          width: 100%;
+          margin-top: 1rem;
+        }
+
+        .floating-button {
+          width: 45px;
+          height: 45px;
+          font-size: 18px;
+          right: 15px;
+        }
+
+        .floating-button.live-list {
+          bottom: 70px;
+        }
+
+        .floating-button.upload-video {
+          bottom: 125px;
+        }
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
-        <div class="container">
-            <a class="navbar-brand d-flex align-items-center gap-2" href="/">
-                <img src="https://cdn.pixabay.com/photo/2023/04/22/04/40/live-streaming-7943006_1280.png" 
-                     alt="Logo" 
-                     style="height: 40px;">
-                LoopStream
-            </a>
-            <button class="navbar-toggler" 
-                    type="button" 
-                    data-bs-toggle="collapse" 
-                    data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link active" href="/live_list">
-                            <i class="bi bi-camera-video me-2"></i>Live List
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/upload_video">
-                            <i class="bi bi-cloud-upload me-2"></i>Upload Video
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/telegram_bot">
-                            <i class="bi bi-telegram me-2"></i>Telegram Bot API
-                        </a>
-                    </li>
-                </ul>
-                <ul class="navbar-nav ms-auto">
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle d-flex align-items-center" 
-                           href="#" 
-                           id="navbarDropdown" 
-                           role="button" 
-                           data-bs-toggle="dropdown">
-                            <i class="bi bi-person-circle me-2"></i>
-                            {{ session.get('username', 'Guest') }}
-                        </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            {% if 'username' in session %}
-                                <li>
-                                    <a class="dropdown-item" href="/logout">
-                                        <i class="bi bi-box-arrow-right me-2"></i>Logout
-                                    </a>
-                                </li>
-                            {% else %}
-                                <li>
-                                    <a class="dropdown-item" href="{{ url_for('login') }}">
-                                        <i class="bi bi-box-arrow-in-right me-2"></i>Login
-                                    </a>
-                                </li>
-                            {% endif %}
-                        </ul>
-                    </li>
-                </ul>
-            </div>
+      <div class="container">
+        <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+          <img
+            src="https://cdn.pixabay.com/photo/2023/04/22/04/40/live-streaming-7943006_1280.png"
+            alt="Logo"
+            style="height: 40px"
+          />
+          LoopStream
+        </a>
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#navbarNav"
+        >
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav me-auto">
+            <li class="nav-item">
+              <a class="nav-link active" href="/live_list">
+                <i class="bi bi-camera-video me-2"></i>Live List
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/upload_video">
+                <i class="bi bi-cloud-upload me-2"></i>Upload Video
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/telegram_bot">
+                <i class="bi bi-telegram me-2"></i>Telegram Bot API
+              </a>
+            </li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item dropdown">
+              <a
+                class="nav-link dropdown-toggle d-flex align-items-center"
+                href="#"
+                id="navbarDropdown"
+                role="button"
+                data-bs-toggle="dropdown"
+              >
+                <i class="bi bi-person-circle me-2"></i>
+                {{ session.get('username', 'Guest') }}
+              </a>
+              <ul class="dropdown-menu dropdown-menu-end">
+                {% if 'username' in session %}
+                <li>
+                  <a class="dropdown-item" href="/logout">
+                    <i class="bi bi-box-arrow-right me-2"></i>Logout
+                  </a>
+                </li>
+                {% else %}
+                <li>
+                  <a class="dropdown-item" href="{{ url_for('login') }}">
+                    <i class="bi bi-box-arrow-in-right me-2"></i>Login
+                  </a>
+                </li>
+                {% endif %}
+              </ul>
+            </li>
+          </ul>
         </div>
+      </div>
     </nav>
 
-    <main class="container mt-5 pt-4">
-        {% block content %}{% endblock %}
-    </main>
+    <main class="container mt-5 pt-4">{% block content %}{% endblock %}</main>
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    
+
     <!-- Smooth Scroll Behavior -->
     <script>
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                document.querySelector(this.getAttribute('href')).scrollIntoView({
-                    behavior: 'smooth'
-                });
-            });
+      document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+        anchor.addEventListener("click", function (e) {
+          e.preventDefault();
+          document.querySelector(this.getAttribute("href")).scrollIntoView({
+            behavior: "smooth",
+          });
         });
+      });
     </script>
 
-    <!-- Floating Button Script -->
+    <!-- Floating Buttons Script -->
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            var isIndexPage = window.location.pathname === '/';
-            if (!isIndexPage) {
-                var button = document.createElement('div');
-                button.className = 'floating-button';
-                button.innerHTML = '<i class="bi bi-broadcast"></i>';
-                button.onclick = function () {
-                    window.location.href = '/';
-                };
-                document.body.appendChild(button);
-            }
-        });
+      document.addEventListener("DOMContentLoaded", function () {
+        // Floating Button 1 - Home
+        var homeButton = document.createElement("div");
+        homeButton.className = "floating-button";
+        homeButton.innerHTML = '<i class="bi bi-broadcast"></i>';
+        homeButton.onclick = function () {
+          window.location.href = "/";
+        };
+        document.body.appendChild(homeButton);
+
+        // Floating Button 2 - Live List
+        var liveListButton = document.createElement("div");
+        liveListButton.className = "floating-button live-list";
+        liveListButton.innerHTML = '<i class="bi bi-cast"></i>';
+        liveListButton.onclick = function () {
+          window.location.href = "/live_list";
+        };
+        document.body.appendChild(liveListButton);
+
+        // Floating Button 3 - Upload Video
+        var uploadVideoButton = document.createElement("div");
+        uploadVideoButton.className = "floating-button upload-video";
+        uploadVideoButton.innerHTML = '<i class="bi bi-cloud-upload"></i>';
+        uploadVideoButton.onclick = function () {
+          window.location.href = "/upload_video";
+        };
+        document.body.appendChild(uploadVideoButton);
+      });
     </script>
-</body>
+  </body>
 </html>
