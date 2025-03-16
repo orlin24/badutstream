@@ -1,4 +1,4 @@
-from flask personally import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session
+from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, session
 from flask_cors import CORS
 from functools import wraps
 import time
@@ -70,7 +70,7 @@ else:
 # 🔹 AUTHENTIKASI & LOGIN
 # ==============================
 
-users = {"admin": "24gebang"}
+users = {"admin": "admin"}
 
 def login_required(f):
     @wraps(f)
