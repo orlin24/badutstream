@@ -70,7 +70,7 @@ else:
 # 🔹 AUTHENTIKASI & LOGIN
 # ==============================
 
-users = {"admin": "admin"}
+users = {"admin": "24gebang"}
 
 def login_required(f):
     @wraps(f)
