@@ -28,7 +28,7 @@ CORS(app)  # Enable CORS for all routes
 # Konfigurasi logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Gunakan lock untuk menghindari race condition saat mengelola proses
+# Gunakan lock untuk menghindari race condition saat menghapus proses dari dictionary
 process_lock = threading.Lock()
 
 # Konfigurasi path
@@ -40,7 +40,7 @@ videos_json_path = os.path.join(uploads_dir, 'videos.json')
 live_info_json_path = os.path.join(uploads_dir, 'live_info.json')
 apibot_json_path = os.path.join(uploads_dir, 'apibot.json')
 
-# Fungsi untuk mengelola pengaturan Telegram bot
+# Definisikan fungsi load_apibot_settings dan save_apibot_settings di sini
 def load_apibot_settings():
     """Memuat pengaturan bot dari file apibot.json."""
     if os.path.exists(apibot_json_path):
@@ -50,10 +50,14 @@ def load_apibot_settings():
 
 def save_apibot_settings(bot_token, chat_id):
     """Menyimpan pengaturan bot ke file apibot.json."""
-    settings = {'botToken': bot_token, 'chatId': chat_id}
+    settings = {
+        'botToken': bot_token,
+        'chatId': chat_id
+    }
     with open(apibot_json_path, 'w') as file:
         json.dump(settings, file)
 
+# Baru setelah ini panggil load_apibot_settings()
 telegram_bot_settings = load_apibot_settings()
 telegram_bot_token = telegram_bot_settings.get('botToken')
 telegram_chat_id = telegram_bot_settings.get('chatId')
@@ -61,7 +65,7 @@ telegram_chat_id = telegram_bot_settings.get('chatId')
 # Tentukan path FFmpeg berdasarkan sistem operasi
 if platform.system() == 'Linux':
     FFMPEG_PATH = '/usr/bin/ffmpeg'
-elif platform.system() == 'Darwin':  # macOS
+elif platform.system() == 'Darwin':  # Darwin adalah nama lain untuk macOS
     FFMPEG_PATH = '/opt/homebrew/bin/ffmpeg'
 else:
     raise Exception("Unsupported operating system")
@@ -70,7 +74,9 @@ else:
 # 🔹 AUTHENTIKASI & LOGIN
 # ==============================
 
-users = {"admin": "admin"}
+users = {
+    "admin": "admin",
+}
 
 def login_required(f):
     @wraps(f)
@@ -97,7 +103,6 @@ def logout():
     session.pop('username', None)
     return redirect(url_for('login'))
 
-# Fungsi untuk mengelola data video dan live
 def load_uploaded_videos():
     if os.path.exists(videos_json_path):
         with open(videos_json_path, 'r') as file:
@@ -113,52 +118,50 @@ def load_live_info():
         with open(live_info_json_path, 'r') as file:
             return json.load(file)
     return {}
+        
+# Load data saat startup
+def load_data():
+    global uploaded_videos, live_info
+    if os.path.exists(videos_json_path):
+        with open(videos_json_path, 'r') as file:
+            uploaded_videos = json.load(file)
+    if os.path.exists(live_info_json_path):
+        with open(live_info_json_path, 'r') as file:
+            live_info = json.load(file)
+
+def restart_if_needed():
+    restart_counts = {}  # Dictionary untuk melacak jumlah restart
+    while True:
+        with process_lock:
+            for live_id in list(processes.keys()):
+                process = processes.get(live_id)
+                if process and process.poll() is not None:  # Proses sudah mati
+                    if live_id in live_info and live_info[live_id]['status'] == 'Active':
+                        restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
+                        if restart_counts[live_id] <= 5:  # Batas 5 restart
+                            logging.debug(f"Restarting live_id: {live_id} (attempt {restart_counts[live_id]})")
+                            del processes[live_id]
+                            threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
+                            send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' mati dan direstart (percobaan {restart_counts[live_id]})")
+                        else:
+                            live_info[live_id]['status'] = 'Stopped'
+                            save_live_info()
+                            send_telegram_notification(f"❌ Live '{live_info[live_id]['title']}' gagal setelah 5 restart.")
+                elif live_id in live_info and live_info[live_id]['status'] == 'Active' and live_id not in processes:
+                    restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
+                    if restart_counts[live_id] <= 999999999999999999999999999:
+                        logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
+                        threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
+                        send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (percobaan {restart_counts[live_id]})")
+        time.sleep(10)  # Cek setiap 10 detik
 
 def save_live_info():
     with open(live_info_json_path, 'w') as file:
         json.dump(live_info, file)
 
-# Load data saat startup
 uploaded_videos = load_uploaded_videos()
 live_info = load_live_info()
 processes = {}
-
-# Fungsi restart unlimited tanpa batas
-def restart_if_needed():
-    restart_counts = {}  # Lacak jumlah restart untuk logging
-    while True:
-        with process_lock:
-            for live_id in list(processes.keys()):
-                process = processes.get(live_id)
-                if process and process.poll() is not None:  # Proses mati
-                    if live_id in live_info and live_info[live_id]['status'] == 'Active':
-                        file_path = os.path.abspath(os.path.join(uploads_dir, live_info[live_id]['video']))
-                        if not os.path.exists(file_path):
-                            logging.error(f"File {file_path} hilang, tidak bisa restart live_id: {live_id}")
-                            live_info[live_id]['status'] = 'Stopped'
-                            save_live_info()
-                            send_telegram_notification(f"❌ File untuk '{live_info[live_id]['title']}' hilang, streaming dihentikan.")
-                            continue
-                        restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
-                        logging.debug(f"Restarting live_id: {live_id} (attempt {restart_counts[live_id]})")
-                        del processes[live_id]
-                        time.sleep(2)  # Delay 2 detik sebelum restart
-                        threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
-                        send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' mati dan direstart (percobaan {restart_counts[live_id]})")
-                elif live_id in live_info and live_info[live_id]['status'] == 'Active' and live_id not in processes:
-                    file_path = os.path.abspath(os.path.join(uploads_dir, live_info[live_id]['video']))
-                    if not os.path.exists(file_path):
-                        logging.error(f"File {file_path} hilang, tidak bisa restart live_id: {live_id}")
-                        live_info[live_id]['status'] = 'Stopped'
-                        save_live_info()
-                        send_telegram_notification(f"❌ File untuk '{live_info[live_id]['title']}' hilang, streaming dihentikan.")
-                        continue
-                    restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
-                    logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
-                    time.sleep(2)  # Delay 2 detik sebelum restart
-                    threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
-                    send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (percobaan {restart_counts[live_id]})")
-        time.sleep(10)  # Cek setiap 10 detik
 
 def update_active_streams():
     for live_id, info in live_info.items():
@@ -207,18 +210,22 @@ def run_ffmpeg(live_id, info):
         bitrate = info.get('bitrate', '5000k')
         duration = int(info.get('duration', 0))
 
-        # Optimasi FFmpeg dengan reconnect
+        # Tambahkan parameter untuk memastikan koneksi RTMP ditutup dengan benar
         ffmpeg_command = f"{FFMPEG_PATH} -loglevel quiet -stream_loop -1 -re -i {shlex.quote(file_path)} " \
                          f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
-                         f"-flvflags no_duration_filesize -rtmp_reconnect 1 -rtmp_reconnect_delay 5 " \
+                         f"-flvflags no_duration_filesize " \
                          f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
 
-        # Arahkan output ke /dev/null atau NUL
-        DEV_NULL = 'NUL' if platform.system() == 'Windows' else '/dev/null'
+        # Arahkan output ke /dev/null (Linux/macOS) atau NUL (Windows) untuk menghindari file log
+        if platform.system() == 'Windows':
+            DEV_NULL = 'NUL'
+        else:
+            DEV_NULL = '/dev/null'
+
         process = subprocess.Popen(
             ffmpeg_command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,  # Arahkan stdout ke /dev/null atau NUL
+            stderr=subprocess.DEVNULL,  # Arahkan stderr ke /dev/null atau NUL
             text=True,
             bufsize=1,
             shell=True,
