@@ -8,7 +8,7 @@ BadutStream
 
 Sebelum memulai instalasi, pastikan Anda memiliki:
 
-- VPS yang menjalankan Ubuntu/Debian
+- VPS Ubuntu 22.04 yang menjalankan Ubuntu/Debian
 - Akses root ke VPS
 
 ### Installation Steps
