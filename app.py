@@ -138,7 +138,7 @@ def restart_if_needed():
                 if process and process.poll() is not None:  # Proses sudah mati
                     if live_id in live_info and live_info[live_id]['status'] == 'Active':
                         restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
-                        if restart_counts[live_id] <= 5:  # Batas 5 restart
+                        if restart_counts[live_id] <= 99999999999999999999999999999:  # Batas 5 restart
                             logging.debug(f"Restarting live_id: {live_id} (attempt {restart_counts[live_id]})")
                             del processes[live_id]
                             threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
@@ -149,7 +149,7 @@ def restart_if_needed():
                             send_telegram_notification(f"❌ Live '{live_info[live_id]['title']}' gagal setelah 5 restart.")
                 elif live_id in live_info and live_info[live_id]['status'] == 'Active' and live_id not in processes:
                     restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
-                    if restart_counts[live_id] <= 999999999999999999999999999:
+                    if restart_counts[live_id] <= 99999999999999999999999999999:
                         logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
                         threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
                         send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (percobaan {restart_counts[live_id]})")
