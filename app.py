@@ -15,6 +15,7 @@ import signal
 import locale
 import shlex
 import requests
+import psutil
 from bs4 import BeautifulSoup
 
 # Matikan log HTTP bawaan Flask
@@ -39,6 +40,22 @@ os.makedirs(uploads_dir, exist_ok=True)
 videos_json_path = os.path.join(uploads_dir, 'videos.json')
 live_info_json_path = os.path.join(uploads_dir, 'live_info.json')
 apibot_json_path = os.path.join(uploads_dir, 'apibot.json')
+
+# Cek ketersediaan cpulimit
+cpulimit_available = False
+try:
+    cpulimit_check = subprocess.run(["which", "cpulimit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    cpulimit_available = cpulimit_check.returncode == 0
+except:
+    cpulimit_available = False
+
+# Cek ketersediaan GPU NVIDIA
+has_nvidia_gpu = False
+try:
+    nvidia_check = subprocess.run(["nvidia-smi"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    has_nvidia_gpu = nvidia_check.returncode == 0
+except:
+    has_nvidia_gpu = False
 
 # Definisikan fungsi load_apibot_settings dan save_apibot_settings di sini
 def load_apibot_settings():
@@ -130,30 +147,55 @@ def load_data():
             live_info = json.load(file)
 
 def restart_if_needed():
-    restart_counts = {}  # Dictionary untuk melacak jumlah restart
     while True:
         with process_lock:
             for live_id in list(processes.keys()):
                 process = processes.get(live_id)
                 if process and process.poll() is not None:  # Proses sudah mati
                     if live_id in live_info and live_info[live_id]['status'] == 'Active':
-                        restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
-                        if restart_counts[live_id] <= 99999999999999999999999999999:  # Batas 5 restart
-                            logging.debug(f"Restarting live_id: {live_id} (attempt {restart_counts[live_id]})")
-                            del processes[live_id]
-                            threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
-                            send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' mati dan direstart (percobaan {restart_counts[live_id]})")
-                        else:
-                            live_info[live_id]['status'] = 'Stopped'
-                            save_live_info()
-                            send_telegram_notification(f"❌ Live '{live_info[live_id]['title']}' gagal setelah 5 restart.")
+                        # Tambahkan delay sebelum restart untuk mencegah restart yang terlalu cepat
+                        logging.debug(f"Stream {live_id} mati, menunggu 3 detik sebelum restart...")
+                        time.sleep(3)
+                        
+                        # Tambahkan logging untuk diagnostik
+                        logging.debug(f"Restarting live_id: {live_id}")
+                        
+                        # Hapus proses lama
+                        del processes[live_id]
+                        
+                        # Jalankan dengan prioritas yang lebih rendah
+                        modified_info = live_info[live_id].copy()
+                        modified_info['restart_count'] = modified_info.get('restart_count', 0) + 1
+                        
+                        # Simpan informasi restart untuk diagnostik
+                        live_info[live_id]['restart_count'] = modified_info['restart_count']
+                        live_info[live_id]['last_restart'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        save_live_info()
+                        
+                        # Jalankan dengan nice untuk mengurangi beban CPU
+                        threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, modified_info]).start()
+                        
+                        # Kirim notifikasi hanya setiap 10 restart untuk mengurangi spam
+                        if modified_info['restart_count'] % 10 == 1:
+                            send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' direstart (total restart: {modified_info['restart_count']})")
+                
                 elif live_id in live_info and live_info[live_id]['status'] == 'Active' and live_id not in processes:
-                    restart_counts[live_id] = restart_counts.get(live_id, 0) + 1
-                    if restart_counts[live_id] <= 99999999999999999999999999999:
-                        logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
-                        threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
-                        send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (percobaan {restart_counts[live_id]})")
-        time.sleep(10)  # Cek setiap 10 detik
+                    # Kasus di mana proses hilang dari dictionary
+                    logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
+                    
+                    # Tambahkan informasi restart
+                    live_info[live_id]['restart_count'] = live_info[live_id].get('restart_count', 0) + 1
+                    live_info[live_id]['last_restart'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    save_live_info()
+                    
+                    threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, live_info[live_id]]).start()
+                    
+                    # Kirim notifikasi hanya setiap 10 restart
+                    if live_info[live_id]['restart_count'] % 10 == 1:
+                        send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (total restart: {live_info[live_id]['restart_count']})")
+        
+        # Cek setiap 10 detik, tidak perlu terlalu sering
+        time.sleep(10)
 
 def save_live_info():
     with open(live_info_json_path, 'w') as file:
@@ -193,6 +235,67 @@ def check_and_update_scheduled_streams():
             if current_time >= schedule_time:
                 run_ffmpeg(live_id, info)
 
+def run_ffmpeg_with_nice(live_id, info):
+    try:
+        file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
+        stream_key = info['streamKey']
+        bitrate = info.get('bitrate', '2500k')  # Default bitrate lebih rendah
+        duration = int(info.get('duration', 0))
+        
+        # Hitung buffer size berdasarkan bitrate
+        bitrate_value = int(bitrate.replace('k', ''))
+        bufsize = f"{bitrate_value * 2}k"
+        maxrate = bitrate
+        
+        # Gunakan nice untuk mengurangi prioritas proses di Linux
+        if platform.system() != 'Windows':
+            if cpulimit_available:
+                # Gunakan cpulimit untuk membatasi penggunaan CPU
+                base_command = f"cpulimit -l 150 {FFMPEG_PATH}"
+            else:
+                # Gunakan nice jika cpulimit tidak tersedia
+                base_command = f"nice -n 10 {FFMPEG_PATH}"
+        else:
+            # Windows tidak mendukung nice atau cpulimit
+            base_command = FFMPEG_PATH
+        
+        # Buat command FFmpeg dengan optimasi
+        ffmpeg_command = f"{base_command} -loglevel quiet -thread_queue_size 16384 -stream_loop -1 -re -i {shlex.quote(file_path)} " \
+                         f"-b:v {bitrate} -bufsize {bufsize} -maxrate {maxrate} " \
+                         f"-f flv -c:v copy -c:a copy -threads 2 " \
+                         f"-flvflags no_duration_filesize " \
+                         f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
+        
+        # Arahkan output ke /dev/null (Linux/macOS) atau NUL (Windows) untuk menghindari file log
+        if platform.system() == 'Windows':
+            DEV_NULL = 'NUL'
+        else:
+            DEV_NULL = '/dev/null'
+        
+        process = subprocess.Popen(
+            ffmpeg_command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            shell=True,
+            preexec_fn=os.setsid if platform.system() != 'Windows' else None
+        )
+        
+        processes[live_id] = process
+        
+        if duration > 0:
+            stop_time = datetime.now() + timedelta(minutes=duration)
+            delay = (stop_time - datetime.now()).total_seconds()
+            if delay > 5:
+                threading.Timer(delay, stop_stream_manually, args=[live_id, True, True]).start()
+                send_telegram_notification(f"⏳ Live '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
+        
+        process.wait()
+        
+    except Exception as e:
+        logging.error(f"FFmpeg error in run_ffmpeg_with_nice: {str(e)}")
+
 def run_ffmpeg(live_id, info):
     try:
         logging.debug(f"Starting FFmpeg for live_id: {live_id} with info: {info}")
@@ -203,44 +306,12 @@ def run_ffmpeg(live_id, info):
 
         if live_id in live_info:
             live_info[live_id]['status'] = 'Active'
+            live_info[live_id]['restart_count'] = 0
+            live_info[live_id]['restart_timestamps'] = []
             save_live_info()
 
-        file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
-        stream_key = info['streamKey']
-        bitrate = info.get('bitrate', '5000k')
-        duration = int(info.get('duration', 0))
-
-        # Tambahkan parameter untuk memastikan koneksi RTMP ditutup dengan benar
-        ffmpeg_command = f"{FFMPEG_PATH} -loglevel quiet -stream_loop -1 -re -i {shlex.quote(file_path)} " \
-                         f"-b:v {bitrate} -f flv -c:v copy -c:a copy " \
-                         f"-flvflags no_duration_filesize " \
-                         f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
-
-        # Arahkan output ke /dev/null (Linux/macOS) atau NUL (Windows) untuk menghindari file log
-        if platform.system() == 'Windows':
-            DEV_NULL = 'NUL'
-        else:
-            DEV_NULL = '/dev/null'
-
-        process = subprocess.Popen(
-            ffmpeg_command,
-            stdout=subprocess.DEVNULL,  # Arahkan stdout ke /dev/null atau NUL
-            stderr=subprocess.DEVNULL,  # Arahkan stderr ke /dev/null atau NUL
-            text=True,
-            bufsize=1,
-            shell=True,
-            preexec_fn=os.setsid if platform.system() != 'Windows' else None
-        )
-        processes[live_id] = process
-
-        if duration > 0:
-            stop_time = datetime.now() + timedelta(minutes=duration)
-            delay = (stop_time - datetime.now()).total_seconds()
-            if delay > 5:
-                threading.Timer(delay, stop_stream_manually, args=[live_id, True, True]).start()
-                send_telegram_notification(f"⏳ Live '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
-
-        process.wait()
+        # Gunakan fungsi run_ffmpeg_with_nice untuk menjalankan FFmpeg
+        threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, info]).start()
 
     except Exception as e:
         logging.error(f"FFmpeg error: {str(e)}")
@@ -268,6 +339,56 @@ def stop_stream_manually(live_id, is_scheduled=False, force=False):
     title = live_info[live_id]['title']
     message = f"⏰ Live terjadwal '{title}' BERHENTI sesuai jadwal" if is_scheduled else f"⛔ Live '{title}' DIHENTIKAN manual"
     send_telegram_notification(message)
+
+@app.route('/update_start_schedule/<id>', methods=['POST'])
+@login_required
+def update_start_schedule(id):
+    if id not in live_info:
+        return jsonify({'message': 'Stream tidak ditemukan!'}), 404
+
+    try:
+        data = request.json
+        start_time = data.get('startTime')
+        
+        if not start_time:
+            return jsonify({'message': 'Waktu mulai diperlukan!'}), 400
+        
+        # Konversi format datetime-local (YYYY-MM-DDThh:mm) ke format yang disimpan
+        try:
+            # Parse datetime dari input
+            dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            
+            # Format untuk penyimpanan
+            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Update status dan waktu mulai
+            live_info[id]['status'] = 'Scheduled'
+            live_info[id]['startTime'] = formatted_time
+            save_live_info()
+            
+            # Batalkan timer lama jika ada
+            # (Ini memerlukan tracking timer, yang bisa ditambahkan jika diperlukan)
+            
+            # Buat timer baru untuk memulai stream pada waktu yang dijadwalkan
+            schedule_time = datetime.strptime(formatted_time, "%Y-%m-%d %H:%M:%S")
+            delay = max(0, (schedule_time - datetime.now()).total_seconds())
+            
+            if delay > 0:
+                threading.Timer(delay, run_ffmpeg, args=[id, live_info[id]]).start()
+                send_telegram_notification(f"✅ Live '{live_info[id]['title']}' dijadwalkan untuk mulai pada {formatted_time}.")
+                return jsonify({'message': f'Jadwal mulai diperbarui! Stream akan dimulai pada {formatted_time}'})
+            else:
+                # Jika waktu sudah lewat, mulai stream sekarang
+                threading.Thread(target=run_ffmpeg, args=[id, live_info[id]]).start()
+                return jsonify({'message': 'Waktu jadwal sudah lewat, stream dimulai sekarang!'})
+                
+        except ValueError as e:
+            logging.error(f"Error parsing date: {str(e)}")
+            return jsonify({'message': f'Format tanggal tidak valid: {str(e)}'}), 400
+            
+    except Exception as e:
+        logging.error(f"Error: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
 
 @app.route('/update_stop_schedule/<id>', methods=['POST'])
 @login_required
@@ -302,6 +423,81 @@ def periodic_check():
     check_and_update_scheduled_streams()
     threading.Timer(60, periodic_check).start()
 
+def monitor_stream_health():
+    while True:
+        restart_counts = {}
+        current_time = datetime.now()
+        
+        for live_id, info in live_info.items():
+            if info['status'] == 'Active' and 'restart_count' in info:
+                # Hitung jumlah restart dalam 1 jam terakhir
+                if 'restart_timestamps' not in info:
+                    info['restart_timestamps'] = []
+                
+                # Tambahkan timestamp restart terbaru jika ada
+                if 'last_restart' in info and info['last_restart'] not in info['restart_timestamps']:
+                    info['restart_timestamps'].append(info['last_restart'])
+                
+                # Filter timestamp dalam 1 jam terakhir
+                one_hour_ago = current_time - timedelta(hours=1)
+                recent_restarts = [ts for ts in info['restart_timestamps'] 
+                                  if datetime.strptime(ts, "%Y-%m-%d %H:%M:%S") > one_hour_ago]
+                
+                info['restart_timestamps'] = recent_restarts
+                restart_counts[live_id] = len(recent_restarts)
+                
+                # Jika restart terlalu sering dalam 1 jam (lebih dari 20 kali)
+                if len(recent_restarts) > 20:
+                    # Kirim peringatan tapi tetap biarkan stream berjalan
+                    send_telegram_notification(f"⚠️ PERINGATAN: Stream '{info['title']}' direstart terlalu sering ({len(recent_restarts)} kali dalam 1 jam). Mungkin ada masalah dengan koneksi atau file video.")
+                    
+                    # Tambahkan log untuk diagnostik
+                    logging.warning(f"Stream {live_id} direstart terlalu sering: {len(recent_restarts)} kali dalam 1 jam")
+        
+        # Simpan informasi restart
+        save_live_info()
+        
+        # Cek setiap 15 menit
+        time.sleep(900)
+
+def monitor_resource_usage():
+    while True:
+        try:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            
+            # Log resource usage untuk monitoring
+            logging.debug(f"Resource usage: CPU {cpu_percent}%, Memory {memory_percent}%")
+            
+            # Peringatan jika resource usage tinggi
+            if cpu_percent > 85 or memory_percent > 85:
+                message = f"⚠️ Peringatan: Penggunaan resource tinggi - CPU: {cpu_percent}%, Memory: {memory_percent}%"
+                logging.warning(message)
+                send_telegram_notification(message)
+                
+                # Jika memory sangat tinggi, hentikan stream yang paling tidak penting
+                if memory_percent > 95:
+                    # Cari stream dengan prioritas terendah
+                    active_streams = [(id, info) for id, info in live_info.items() 
+                                     if info['status'] == 'Active']
+                    
+                    if active_streams:
+                        # Urutkan berdasarkan prioritas (jika ada) atau restart_count
+                        sorted_streams = sorted(active_streams, 
+                                              key=lambda x: x[1].get('priority', 0) or x[1].get('restart_count', 0))
+                        
+                        # Hentikan stream dengan prioritas terendah
+                        if sorted_streams:
+                            low_priority_id = sorted_streams[0][0]
+                            stop_stream_manually(low_priority_id, force=True)
+                            send_telegram_notification(f"🛑 Memory hampir penuh ({memory_percent}%). Stream '{live_info[low_priority_id]['title']}' dihentikan otomatis.")
+        except Exception as e:
+            logging.error(f"Error in resource monitoring: {str(e)}")
+        
+        # Cek setiap 30 detik
+        time.sleep(30)
+
 def format_size(size):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024:
@@ -330,6 +526,7 @@ def start_stream():
         schedule_date = data.get('scheduleDate')
         bitrate = data.get('bitrate')
         duration = data.get('duration')
+        priority = data.get('priority', '5')  # Default priority 5 (medium)
 
         if not all([title, video_filename, stream_key]):
             return jsonify({'message': 'Missing parameters'}), 400
@@ -338,6 +535,23 @@ def start_stream():
         if not video:
             return jsonify({'message': 'Video not found'}), 404
 
+        # Cek jumlah stream aktif
+        active_streams = sum(1 for info in live_info.values() if info['status'] == 'Active')
+        
+        # Periksa resource saat ini
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory_percent = psutil.virtual_memory().percent
+        
+        # Peringatan jika sudah banyak stream aktif atau resource tinggi
+        warning_message = None
+        if active_streams >= 3:
+            warning_message = f"⚠️ Peringatan: Sudah ada {active_streams} stream aktif. Menambahkan stream baru mungkin akan mempengaruhi performa."
+        elif cpu_percent > 80 or memory_percent > 80:
+            warning_message = f"⚠️ Peringatan: Resource sistem tinggi (CPU: {cpu_percent}%, Memory: {memory_percent}%). Menambahkan stream baru mungkin akan mempengaruhi performa."
+        
+        if warning_message:
+            send_telegram_notification(warning_message)
+
         live_id = str(uuid.uuid4())
         live_info[live_id] = {
             'title': title,
@@ -345,8 +559,11 @@ def start_stream():
             'streamKey': stream_key,
             'status': 'Scheduled' if schedule_date else 'Pending',
             'startTime': schedule_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'bitrate': f'{bitrate}k' if bitrate else '5000k',
-            'duration': int(duration) if duration else 0
+            'bitrate': f'{bitrate}k' if bitrate else '2500k',  # Default 2500k
+            'duration': int(duration) if duration else 0,
+            'priority': int(priority),
+            'restart_count': 0,
+            'restart_timestamps': []
         }
         save_live_info()
 
@@ -361,7 +578,8 @@ def start_stream():
 
         return jsonify({
             'message': 'Stream scheduled' if schedule_date else 'Stream started',
-            'id': live_id
+            'id': live_id,
+            'warning': warning_message
         })
 
     except Exception as e:
@@ -585,6 +803,37 @@ def delete_video():
         logging.error(f"Error: {str(e)}")
         return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
 
+@app.route('/system_info')
+@login_required
+def system_info():
+    try:
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        active_streams = sum(1 for info in live_info.values() if info['status'] == 'Active')
+        
+        info = {
+            'cpu_percent': cpu_percent,
+            'memory_percent': memory.percent,
+            'memory_used': format_size(memory.used),
+            'memory_total': format_size(memory.total),
+            'disk_percent': disk.percent,
+            'disk_used': format_size(disk.used),
+            'disk_total': format_size(disk.total),
+            'active_streams': active_streams,
+            'has_nvidia_gpu': has_nvidia_gpu,
+            'cpulimit_available': cpulimit_available,
+            'platform': platform.system(),
+            'python_version': platform.python_version(),
+            'ffmpeg_path': FFMPEG_PATH
+        }
+        
+        return jsonify(info)
+    except Exception as e:
+        logging.error(f"Error getting system info: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 if not os.path.exists(uploads_dir):
     os.makedirs(uploads_dir)
 
@@ -627,6 +876,12 @@ periodic_check()
 
 # Jalankan monitoring untuk restart otomatis
 threading.Thread(target=restart_if_needed, daemon=True).start()
+
+# Jalankan monitoring kesehatan stream
+threading.Thread(target=monitor_stream_health, daemon=True).start()
+
+# Jalankan monitoring resource
+threading.Thread(target=monitor_resource_usage, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
