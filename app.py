@@ -195,8 +195,8 @@ def restart_if_needed():
                     if live_info[live_id]['restart_count'] % 10 == 1:
                         send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (total restart: {live_info[live_id]['restart_count']})")
         
-        # Cek setiap 30 detik untuk mengurangi beban
-        time.sleep(30)
+        # Cek setiap 10 detik untuk memastikan restart cepat
+        time.sleep(10)
 
 def save_live_info():
     with open(live_info_json_path, 'w') as file:
@@ -244,48 +244,41 @@ def run_ffmpeg_with_nice(live_id, info):
         duration = int(info.get('duration', 0))
         
         # Hitung buffer size berdasarkan bitrate
-        bufsize = bitrate  # Disamakan dengan bitrate untuk mengurangi memori
+        bitrate_value = int(bitrate.replace('k', ''))
+        bufsize = f"{bitrate_value * 2}k"
+        maxrate = bitrate
         
         # Gunakan nice untuk mengurangi prioritas proses di Linux
         if platform.system() != 'Windows':
             if cpulimit_available:
-                # Batasi penggunaan CPU (maks 100% dari satu core)
-                base_command = f"cpulimit -l 100 -- {FFMPEG_PATH}"
+                # Gunakan cpulimit untuk membatasi penggunaan CPU
+                base_command = f"cpulimit -l 150 {FFMPEG_PATH}"
             else:
-                # Gunakan nice dengan prioritas rendah jika cpulimit tidak tersedia
-                base_command = f"nice -n 15 {FFMPEG_PATH}"
+                # Gunakan nice jika cpulimit tidak tersedia
+                base_command = f"nice -n 10 {FFMPEG_PATH}"
         else:
             # Windows tidak mendukung nice atau cpulimit
             base_command = FFMPEG_PATH
         
-        # OPTIMASI UTAMA: Perintah FFmpeg yang lebih efisien
-        ffmpeg_command = [
-            base_command,
-            '-loglevel', 'warning',  # Hanya tampilkan warning untuk mengurangi log
-            '-thread_queue_size', '4096',  # Dioptimalkan dari 16384 (mengurangi memori)
-            '-stream_loop', '-1',
-            '-re',
-            '-i', file_path,
-            '-b:v', bitrate,
-            '-bufsize', bufsize,
-            '-maxrate', bitrate,
-            '-f', 'flv',
-            '-c:v', 'copy',  # Copy tanpa re-encode
-            '-c:a', 'copy',  # Copy tanpa re-encode
-            '-threads', '2',  # Batasi thread FFmpeg
-            '-flvflags', 'no_duration_filesize',
-            f'rtmp://a.rtmp.youtube.com/live2/{stream_key}'
-        ]
+        # Perintah FFmpeg yang lebih kompatibel
+        ffmpeg_command = (
+            f"{base_command} -loglevel warning "
+            f"-thread_queue_size 16384 "
+            f"-stream_loop -1 -re -i {shlex.quote(file_path)} "
+            f"-b:v {bitrate} -bufsize {bufsize} -maxrate {maxrate} "
+            f"-f flv -c:v copy -c:a copy "
+            f"-flvflags no_duration_filesize "
+            f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
+        )
         
-        # Konversi ke string untuk shell jika di Windows
-        if platform.system() == 'Windows':
-            ffmpeg_command = " ".join(ffmpeg_command)
-        
+        # Jalankan perintah dengan shell=True
         process = subprocess.Popen(
             ffmpeg_command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            shell=(platform.system() == 'Windows'),  # Hanya gunakan shell di Windows
+            shell=True,
+            text=True,
+            bufsize=1,
             preexec_fn=os.setsid if platform.system() != 'Windows' else None
         )
         
@@ -302,6 +295,34 @@ def run_ffmpeg_with_nice(live_id, info):
         
     except Exception as e:
         logging.error(f"FFmpeg error in run_ffmpeg_with_nice: {str(e)}")
+        # Coba jalankan tanpa optimasi jika gagal
+        try:
+            logging.warning("Mencoba menjalankan FFmpeg tanpa optimasi...")
+            ffmpeg_command = (
+                f"{FFMPEG_PATH} -loglevel warning "
+                f"-thread_queue_size 16384 "
+                f"-stream_loop -1 -re -i {shlex.quote(file_path)} "
+                f"-b:v {bitrate} -bufsize {bufsize} -maxrate {maxrate} "
+                f"-f flv -c:v copy -c:a copy "
+                f"-flvflags no_duration_filesize "
+                f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
+            )
+            
+            process = subprocess.Popen(
+                ffmpeg_command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=True,
+                text=True,
+                bufsize=1,
+                preexec_fn=os.setsid if platform.system() != 'Windows' else None
+            )
+            
+            processes[live_id] = process
+            process.wait()
+        except Exception as e2:
+            logging.error(f"FFmpeg error tanpa optimasi: {str(e2)}")
+            send_telegram_notification(f"🚨 GAGAL menjalankan live '{info['title']}': {str(e2)}")
 
 def run_ffmpeg(live_id, info):
     try:
@@ -322,6 +343,7 @@ def run_ffmpeg(live_id, info):
 
     except Exception as e:
         logging.error(f"FFmpeg error: {str(e)}")
+        send_telegram_notification(f"🚨 GAGAL memulai live '{info['title']}': {str(e)}")
 
 def stop_stream_manually(live_id, is_scheduled=False, force=False):
     logging.debug(f"Attempting to stop stream manually for live_id: {live_id}, force={force}")
@@ -329,15 +351,16 @@ def stop_stream_manually(live_id, is_scheduled=False, force=False):
         process = processes.pop(live_id, None)
 
     if process and process.poll() is None:
-        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        # Hentikan proses dengan benar
         try:
+            process.terminate()
             process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            process.wait(timeout=5)
-
-        if force and process.poll() is None:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                process.wait(timeout=5)
+            except:
+                pass
 
     if live_id in live_info:
         live_info[live_id]['status'] = 'Stopped'
@@ -470,8 +493,8 @@ def monitor_stream_health():
 def monitor_resource_usage():
     while True:
         try:
-            # Cek setiap 60 detik untuk mengurangi overhead
-            time.sleep(60)
+            # Cek setiap 30 detik
+            time.sleep(30)
             
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
@@ -481,7 +504,7 @@ def monitor_resource_usage():
             logging.debug(f"Resource usage: CPU {cpu_percent}%, Memory {memory_percent}%")
             
             # Peringatan jika resource usage tinggi
-            if cpu_percent > 85 or memory_percent > 85:
+            if cpu_percent > 90 or memory_percent > 90:
                 message = f"⚠️ Peringatan: Penggunaan resource tinggi - CPU: {cpu_percent}%, Memory: {memory_percent}%"
                 logging.warning(message)
                 send_telegram_notification(message)
@@ -513,9 +536,12 @@ def format_size(size):
     return f"{size:.2f} TB"
 
 def get_file_name_from_google_drive_url(url):
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    return soup.title.string.replace(" - Google Drive", "")
+    try:
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        return soup.title.string.replace(" - Google Drive", "")
+    except:
+        return "downloaded_video.mp4"
 
 @app.route('/')
 @login_required
