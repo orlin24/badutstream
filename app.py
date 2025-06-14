@@ -149,7 +149,8 @@ def load_data():
 def restart_if_needed():
     while True:
         with process_lock:
-            for live_id in list(processes.keys()):
+            live_ids = list(processes.keys())  # Create a copy to avoid modification during iteration
+            for live_id in live_ids:
                 process = processes.get(live_id)
                 if process and process.poll() is not None:  # Proses sudah mati
                     if live_id in live_info and live_info[live_id]['status'] == 'Active':
@@ -194,8 +195,8 @@ def restart_if_needed():
                     if live_info[live_id]['restart_count'] % 10 == 1:
                         send_telegram_notification(f"⚠️ Live '{live_info[live_id]['title']}' hilang dan direstart (total restart: {live_info[live_id]['restart_count']})")
         
-        # Cek setiap 10 detik, tidak perlu terlalu sering
-        time.sleep(10)
+        # Cek setiap 30 detik untuk mengurangi beban
+        time.sleep(30)
 
 def save_live_info():
     with open(live_info_json_path, 'w') as file:
@@ -243,42 +244,48 @@ def run_ffmpeg_with_nice(live_id, info):
         duration = int(info.get('duration', 0))
         
         # Hitung buffer size berdasarkan bitrate
-        bitrate_value = int(bitrate.replace('k', ''))
-        bufsize = f"{bitrate_value * 2}k"
-        maxrate = bitrate
+        bufsize = bitrate  # Disamakan dengan bitrate untuk mengurangi memori
         
         # Gunakan nice untuk mengurangi prioritas proses di Linux
         if platform.system() != 'Windows':
             if cpulimit_available:
-                # Gunakan cpulimit untuk membatasi penggunaan CPU
-                base_command = f"cpulimit -l 150 {FFMPEG_PATH}"
+                # Batasi penggunaan CPU (maks 100% dari satu core)
+                base_command = f"cpulimit -l 100 -- {FFMPEG_PATH}"
             else:
-                # Gunakan nice jika cpulimit tidak tersedia
-                base_command = f"nice -n 10 {FFMPEG_PATH}"
+                # Gunakan nice dengan prioritas rendah jika cpulimit tidak tersedia
+                base_command = f"nice -n 15 {FFMPEG_PATH}"
         else:
             # Windows tidak mendukung nice atau cpulimit
             base_command = FFMPEG_PATH
         
-        # Buat command FFmpeg dengan optimasi
-        ffmpeg_command = f"{base_command} -loglevel quiet -thread_queue_size 16384 -stream_loop -1 -re -i {shlex.quote(file_path)} " \
-                         f"-b:v {bitrate} -bufsize {bufsize} -maxrate {maxrate} " \
-                         f"-f flv -c:v copy -c:a copy -threads 2 " \
-                         f"-flvflags no_duration_filesize " \
-                         f"rtmp://a.rtmp.youtube.com/live2/{shlex.quote(stream_key)}"
+        # OPTIMASI UTAMA: Perintah FFmpeg yang lebih efisien
+        ffmpeg_command = [
+            base_command,
+            '-loglevel', 'warning',  # Hanya tampilkan warning untuk mengurangi log
+            '-thread_queue_size', '4096',  # Dioptimalkan dari 16384 (mengurangi memori)
+            '-stream_loop', '-1',
+            '-re',
+            '-i', file_path,
+            '-b:v', bitrate,
+            '-bufsize', bufsize,
+            '-maxrate', bitrate,
+            '-f', 'flv',
+            '-c:v', 'copy',  # Copy tanpa re-encode
+            '-c:a', 'copy',  # Copy tanpa re-encode
+            '-threads', '2',  # Batasi thread FFmpeg
+            '-flvflags', 'no_duration_filesize',
+            f'rtmp://a.rtmp.youtube.com/live2/{stream_key}'
+        ]
         
-        # Arahkan output ke /dev/null (Linux/macOS) atau NUL (Windows) untuk menghindari file log
+        # Konversi ke string untuk shell jika di Windows
         if platform.system() == 'Windows':
-            DEV_NULL = 'NUL'
-        else:
-            DEV_NULL = '/dev/null'
+            ffmpeg_command = " ".join(ffmpeg_command)
         
         process = subprocess.Popen(
             ffmpeg_command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-            shell=True,
+            shell=(platform.system() == 'Windows'),  # Hanya gunakan shell di Windows
             preexec_fn=os.setsid if platform.system() != 'Windows' else None
         )
         
@@ -463,6 +470,9 @@ def monitor_stream_health():
 def monitor_resource_usage():
     while True:
         try:
+            # Cek setiap 60 detik untuk mengurangi overhead
+            time.sleep(60)
+            
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
             memory_percent = memory.percent
@@ -494,9 +504,6 @@ def monitor_resource_usage():
                             send_telegram_notification(f"🛑 Memory hampir penuh ({memory_percent}%). Stream '{live_info[low_priority_id]['title']}' dihentikan otomatis.")
         except Exception as e:
             logging.error(f"Error in resource monitoring: {str(e)}")
-        
-        # Cek setiap 30 detik
-        time.sleep(30)
 
 def format_size(size):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -849,6 +856,71 @@ def send_telegram_notification(message):
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to send Telegram notification: {e}")
+
+# Global variables for network measurement
+last_net_io = None
+last_time = None
+
+@app.route('/system_stats')
+@login_required
+def system_stats():
+    global last_net_io, last_time
+    
+    try:
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        
+        # Get current network stats
+        current_net_io = psutil.net_io_counters()
+        current_time = time.time()
+        
+        download_speed = "0 Kbps"
+        upload_speed = "0 Mbps"
+        
+        # Calculate speed if we have previous measurements
+        if last_net_io and last_time:
+            time_diff = current_time - last_time
+            
+            if time_diff > 0.5:  # Minimal 0.5 detik untuk akurasi
+                download_diff = current_net_io.bytes_recv - last_net_io.bytes_recv
+                upload_diff = current_net_io.bytes_sent - last_net_io.bytes_sent
+                
+                # Calculate speeds in Kbps and Mbps
+                download_kbps = (download_diff * 8) / (time_diff * 1000)  # bytes to kilobits
+                upload_mbps = (upload_diff * 8) / (time_diff * 1000000)   # bytes to megabits
+                
+                # Format with 2 decimal places
+                download_speed = f"{download_kbps:.2f} Kbps"
+                upload_speed = f"{upload_mbps:.2f} Mbps"
+        
+        # Update last measurements
+        last_net_io = current_net_io
+        last_time = current_time
+        
+        return jsonify({
+            'cpu': f"{cpu_percent}%",
+            'memory': f"{format_size(memory.used)} / {format_size(memory.total)}",
+            'memory_percent': memory.percent,
+            'download': download_speed,
+            'upload': upload_speed
+        })
+    except Exception as e:
+        logging.error(f"Error getting system stats: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    
+def format_size(size):
+    """Format size in bytes to human-readable format with speed units"""
+    # Convert to float if it's integer
+    size = float(size)
+    
+    units = ['B', 'KB', 'MB', 'GB']
+    unit_index = 0
+    
+    while size >= 1024 and unit_index < len(units)-1:
+        size /= 1024
+        unit_index += 1
+        
+    return f"{size:.1f} {units[unit_index]}"
 
 @app.route('/set_telegram_bot', methods=['POST'])
 @login_required
