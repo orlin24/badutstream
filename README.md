@@ -27,3 +27,9 @@ Ikuti langkah-langkah berikut untuk menginstal BadutStream di VPS Anda:
 
 Installer akan mengatur semua konfigurasi yang diperlukan secara otomatis.
 
+  ```bash
+cd /var/www/html/badutstream
+source venv/bin/activate
+python3 app.py
+```
+
