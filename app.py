@@ -221,7 +221,7 @@ def run_ffmpeg_with_nice(live_id, info):
     try:
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
-        bitrate = info.get('bitrate', '2500k')
+        bitrate = info.get('bitrate', '2500k')  # Default bitrate lebih rendah
         duration = int(info.get('duration', 0))
         
         # Hitung buffer size berdasarkan bitrate
@@ -246,25 +246,11 @@ def run_ffmpeg_with_nice(live_id, info):
         # Bangun perintah FFmpeg
         ffmpeg_args = [
             "-loglevel", "warning",
-            "-thread_queue_size", "8192",
-            
-            # Looping optimizations
-            "-stream_loop", "-1",  # Infinite loop
-            "-re",  # Real-time
-            "-fflags", "+genpts",  # Generate timestamps for seamless loop
-            "-avoid_negative_ts", "make_zero",  # Fix timestamp issues
-            
-            "-i", file_path,
-            
-            # Fast encoding for quick startup
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-g", "30",  # Keyframe every 1 second for smooth loop
-            
+            "-thread_queue_size", "16384",
+            "-stream_loop", "-1", "-re", "-i", file_path,
             "-b:v", bitrate, "-bufsize", bufsize, "-maxrate", maxrate,
-            "-c:a", "aac", "-b:a", "128k",
-            
-            "-f", "flv",
+            "-f", "flv", "-c:v", "copy", "-c:a", "copy",
+            "-flvflags", "no_duration_filesize",
             f"rtmp://a.rtmp.youtube.com/live2/{stream_key}"
         ]
         
