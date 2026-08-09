@@ -1045,6 +1045,15 @@ def upload_video():
             if not file_url or ('drive.google.com' not in file_url and 'docs.google.com' not in file_url):
                 return jsonify({'success': False, 'message': 'URL harus dari Google Drive'}), 400
 
+            # Cegah disk penuh: tolak upload kalau sisa ruang terlalu sedikit
+            disk = psutil.disk_usage(uploads_dir)
+            if disk.free < 2 * 1024 * 1024 * 1024:  # kurang dari 2 GB bebas
+                return jsonify({
+                    'success': False,
+                    'message': 'Ruang disk hampir penuh (sisa kurang dari 2 GB). '
+                               'Hapus beberapa video yang tidak terpakai, lalu coba lagi.'
+                }), 400
+
             original_name = sanitize_filename(get_file_name_from_google_drive_url(file_url))
             unique_filename = f"{uuid.uuid4()}_{original_name}"
             file_path = os.path.join(uploads_dir, unique_filename)
