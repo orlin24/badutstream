@@ -1,0 +1,13 @@
+# Runtime data & video (dibuat otomatis oleh aplikasi di server)
+uploads/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Log
+*.log
+
+# OS
+.DS_Store

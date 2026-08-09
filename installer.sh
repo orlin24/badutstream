@@ -1,79 +1,159 @@
 #!/bin/bash
-set -e  # Menghentikan script jika ada perintah yang gagal
+set -e  # Berhenti jika ada perintah yang gagal
 
-# Update & Upgrade Sistem
-echo -e "\e[32mUpdating and upgrading system...\e[0m"
-sudo apt update && sudo apt upgrade -y
+# ============================================================
+# LoopStream - Auto Installer
+# Cara pakai:
+#   wget -O installer.sh https://raw.githubusercontent.com/orlin24/badutstream/main/installer.sh
+#   chmod +x installer.sh
+#   ./installer.sh
+# ============================================================
 
-# Install Git
-echo -e "\e[32mInstalling Git...\e[0m"
-apt install git -y
+export DEBIAN_FRONTEND=noninteractive
 
-# Konfigurasi Firewall
-echo -e "\e[32mConfiguring firewall...\e[0m"
-sudo ufw allow OpenSSH  # Mengizinkan akses SSH (port 22)
-sudo ufw allow 5000/tcp  # Untuk aplikasi Python (Flask/FastAPI) di port 5000
-sudo ufw allow 1935/tcp  # Untuk RTMP server
-echo -e "\e[32mEnabling UFW...\e[0m"
-echo "y" | sudo ufw enable
+GREEN='\033[32m'
+YELLOW='\033[33m'
+CYAN='\033[36m'
+NC='\033[0m'
 
-# Pastikan direktori /var/www/html ada
-echo -e "\e[32mEnsuring /var/www/html exists...\e[0m"
-sudo mkdir -p /var/www/html
+info()  { echo -e "${CYAN}[*]${NC} $1"; }
+ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 
-# Pindah ke Direktori Web
-cd /var/www/html
-
-# Clone Repository dari GitHub jika belum ada
-if [ ! -d "badutstream" ]; then
-    echo -e "\e[32mCloning repository...\e[0m"
-    git clone https://github.com/orlin24/badutstream.git
+# ---- Deteksi root / sudo ----
+if [ "$(id -u)" -eq 0 ]; then
+    SUDO=""
+    APP_USER="${SUDO_USER:-root}"
 else
-    echo -e "\e[32mRepository 'badutstream' already exists. Pulling latest changes...\e[0m"
-    cd badutstream
-    git pull
-    cd ..
+    SUDO="sudo"
+    APP_USER="$USER"
 fi
 
-cd badutstream
+APP_DIR="/var/www/html/badutstream"
+REPO_URL="https://github.com/orlin24/badutstream.git"
 
-# Beri Izin Akses yang Lebih Aman
-echo -e "\e[32mSetting folder permissions to 755 and ownership to www-data...\e[0m"
-sudo chmod -R 755 .
-sudo chown -R www-data:www-data .
+# ============================================================
+# 1. Update sistem + instal dependensi
+# ============================================================
+info "Memperbarui sistem..."
+$SUDO apt update -y
+$SUDO apt upgrade -y || warn "apt upgrade gagal, melanjutkan instalasi..."
 
-# Set Zona Waktu
-echo -e "\e[32mSetting timezone to Asia/Jakarta...\e[0m"
-sudo timedatectl set-timezone Asia/Jakarta
+info "Menginstal Git, FFmpeg, cpulimit, python3..."
+$SUDO apt install -y git ffmpeg cpulimit python3-pip python3-venv
+ok "Dependensi sistem terpasang."
 
-# Install Python Virtual Environment, FFmpeg, tmux, dan pip
-echo -e "\e[32mInstalling python3.10-venv, ffmpeg, tmux, and python3-pip...\e[0m"
-sudo apt install python3.10-venv ffmpeg tmux python3-pip -y
+# ============================================================
+# 2. Firewall (opsional, tidak fatal kalau gagal)
+# ============================================================
+if command -v ufw >/dev/null 2>&1; then
+    info "Mengonfigurasi firewall (UFW)..."
+    $SUDO ufw allow OpenSSH || true
+    $SUDO ufw allow 5000/tcp || true   # Aplikasi web
+    $SUDO ufw allow 1935/tcp || true   # RTMP (kalau dipakai)
+    echo "y" | $SUDO ufw enable || true
+    ok "Firewall dikonfigurasi."
+else
+    warn "UFW tidak ditemukan, dilewati."
+fi
 
-# Buat Virtual Environment dan Install Dependencies
-echo -e "\e[32mCreating virtual environment and installing dependencies...\e[0m"
-python3 -m venv venv
+# ============================================================
+# 3. Ambil kode aplikasi
+# ============================================================
+$SUDO mkdir -p /var/www/html
+if [ ! -d "$APP_DIR/.git" ]; then
+    info "Meng-clone repository..."
+    $SUDO git clone "$REPO_URL" "$APP_DIR"
+else
+    info "Repository sudah ada, memperbarui ke versi terbaru..."
+    cd "$APP_DIR"
+    git fetch origin
+    git reset --hard origin/HEAD
+fi
+ok "Kode aplikasi siap."
+
+# Pastikan kepemilikan folder milik user yang menjalankan app
+$SUDO chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+$SUDO chmod -R 755 "$APP_DIR"
+cd "$APP_DIR"
+
+# ============================================================
+# 4. Zona waktu
+# ============================================================
+info "Mengatur zona waktu Asia/Jakarta..."
+$SUDO timedatectl set-timezone Asia/Jakarta || true
+ok "Zona waktu diatur."
+
+# ============================================================
+# 5. Virtual environment + dependensi Python
+# ============================================================
+if [ ! -x venv/bin/python ]; then
+    info "Membuat virtual environment..."
+    python3 -m venv venv
+fi
 source venv/bin/activate
+info "Menginstal dependensi Python..."
 pip install --upgrade pip
 if [ -f "requirements.txt" ]; then
     pip install -r requirements.txt
 else
-    echo -e "\e[32mrequirements.txt not found. Skipping dependency installation.\e[0m"
+    warn "requirements.txt tidak ditemukan, melewati instalasi dependensi."
 fi
+ok "Dependensi Python terpasang."
 
-# Jalankan Aplikasi di dalam tmux session (default: badutstream)
-echo -e "\e[32mStarting application in tmux session 'badutstream'...\e[0m"
-if [ -f "app.py" ]; then
-    tmux new-session -d -s badutstream "cd $(pwd) && source venv/bin/activate && python3 app.py; exec bash"
+# ============================================================
+# 6. Jalankan otomatis (systemd kalau ada, fallback tmux)
+# ============================================================
+if command -v systemctl >/dev/null 2>&1 && [ "$(ps -p 1 -o comm=)" = "systemd" ]; then
+    info "Membuat service systemd 'badutstream' (auto-restart saat reboot/crash)..."
+    SERVICE_FILE="/etc/systemd/system/badutstream.service"
+    $SUDO tee "$SERVICE_FILE" > /dev/null <<EOF
+[Unit]
+Description=LoopStream - YouTube Live Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$APP_USER
+WorkingDirectory=$APP_DIR
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl enable badutstream
+    $SUDO systemctl restart badutstream
+    ok "Service systemd aktif (auto-restart + auto-start saat boot)."
+    SERVICE_NOTE="Lihat log: journalctl -u badutstream -f"
 else
-    echo -e "\e[32mError: app.py not found. Skipping tmux session.\e[0m"
+    warn "systemd tidak tersedia, memakai tmux (tidak auto-start saat reboot)."
+    $SUDO apt install -y tmux || true
+    $SUDO pkill -f "$APP_DIR/venv/bin/python $APP_DIR/app.py" 2>/dev/null || true
+    tmux kill-session -t badutstream 2>/dev/null || true
+    tmux new-session -d -s badutstream "cd $APP_DIR && source venv/bin/activate && python3 app.py; exec bash"
+    SERVICE_NOTE="Lihat log: tmux attach -t badutstream"
 fi
 
-# Mendapatkan IP VPS
+# ============================================================
+# 7. Informasi akses
+# ============================================================
 IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo "======================================================"
+echo "  LoopStream berhasil diinstal!"
+echo ""
+echo "  URL      : http://$IP:5000"
+echo "  Username : admin"
+echo "  Password : admin"
+echo ""
+echo "  $SERVICE_NOTE"
+echo "  Ganti password default setelah login!"
+echo "======================================================"
 
-echo -e "\e[32mLoopstream Berhasil di Install. Access via: http://$IP:5000\e[0m"
-echo -e "\e[33mUsername: admin\e[0m"
-echo -e "\e[33mPassword: admin\e[0m"
-
+# Hapus installer setelah sukses
 rm -f "$(realpath "$0")"

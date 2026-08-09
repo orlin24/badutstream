@@ -13,7 +13,6 @@ import platform
 import logging
 import signal
 import locale
-import shlex
 import requests
 import psutil
 from bs4 import BeautifulSoup
@@ -39,7 +38,6 @@ os.makedirs(uploads_dir, exist_ok=True)
 
 videos_json_path = os.path.join(uploads_dir, 'videos.json')
 live_info_json_path = os.path.join(uploads_dir, 'live_info.json')
-apibot_json_path = os.path.join(uploads_dir, 'apibot.json')
 
 # Cek ketersediaan cpulimit
 cpulimit_available = False
@@ -56,28 +54,6 @@ try:
     has_nvidia_gpu = nvidia_check.returncode == 0
 except:
     has_nvidia_gpu = False
-
-# Definisikan fungsi load_apibot_settings dan save_apibot_settings di sini
-def load_apibot_settings():
-    """Memuat pengaturan bot dari file apibot.json."""
-    if os.path.exists(apibot_json_path):
-        with open(apibot_json_path, 'r') as file:
-            return json.load(file)
-    return {}
-
-def save_apibot_settings(bot_token, chat_id):
-    """Menyimpan pengaturan bot ke file apibot.json."""
-    settings = {
-        'botToken': bot_token,
-        'chatId': chat_id
-    }
-    with open(apibot_json_path, 'w') as file:
-        json.dump(settings, file)
-
-# Baru setelah ini panggil load_apibot_settings()
-telegram_bot_settings = load_apibot_settings()
-telegram_bot_token = telegram_bot_settings.get('botToken')
-telegram_chat_id = telegram_bot_settings.get('chatId')
 
 # Tentukan path FFmpeg berdasarkan sistem operasi
 if platform.system() == 'Linux':
@@ -126,9 +102,18 @@ def load_uploaded_videos():
             return json.load(file)
     return []
 
+def _atomic_json_write(path, data):
+    """Tulis JSON secara atomik (temp + rename) agar tidak korup saat crash."""
+    tmp_path = path + '.tmp'
+    with open(tmp_path, 'w') as file:
+        json.dump(data, file)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(tmp_path, path)
+
+
 def save_uploaded_videos():
-    with open(videos_json_path, 'w') as file:
-        json.dump(uploaded_videos, file)
+    _atomic_json_write(videos_json_path, uploaded_videos)
 
 def load_live_info():
     if os.path.exists(live_info_json_path):
@@ -149,43 +134,192 @@ def load_data():
 # Panggil load_data saat startup
 load_data()
 
+def _restart_stream_with_limit(live_id, info):
+    """Restart stream dengan batas percobaan untuk mencegah loop tak terbatas."""
+    attempts = record_restart_attempt(live_id)
+    if attempts > RESTART_MAX_ATTEMPTS:
+        logging.warning(
+            f"Stream {live_id} gagal restart {attempts}x dalam {RESTART_WINDOW_SECONDS}s, "
+            f"status diubah menjadi Stopped."
+        )
+        if live_id in live_info:
+            live_info[live_id]['status'] = 'Stopped'
+            save_live_info()
+        return
+    threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, dict(info)]).start()
+
+
 def restart_if_needed():
     while True:
         with process_lock:
-            live_ids = list(processes.keys())  # Create a copy to avoid modification during iteration
+            live_ids = list(processes.keys())
             for live_id in live_ids:
+                info = live_info.get(live_id)
+                if not info or info.get('status') != 'Active':
+                    continue
                 process = processes.get(live_id)
                 if process and process.poll() is not None:  # Proses sudah mati
-                    if live_id in live_info and live_info[live_id]['status'] == 'Active':
-                        # Tambahkan logging untuk diagnostik
-                        logging.debug(f"Stream {live_id} mati, melakukan restart...")
-                        
-                        # Hapus proses lama
-                        del processes[live_id]
-                        
-                        # Jalankan dengan prioritas yang lebih rendah
-                        modified_info = live_info[live_id].copy()
-                        
-                        # Jalankan dengan nice untuk mengurangi beban CPU
-                        threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, modified_info]).start()
-                
-                elif live_id in live_info and live_info[live_id]['status'] == 'Active' and live_id not in processes:
-                    # Kasus di mana proses hilang dari dictionary
+                    logging.debug(f"Stream {live_id} mati, melakukan restart...")
+                    del processes[live_id]
+                    _restart_stream_with_limit(live_id, info)
+                elif live_id not in processes:
+                    # Proses hilang dari dictionary (mis. crash), restart otomatis
                     logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
-                    
-                    threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, live_info[live_id]]).start()
-        
+                    _restart_stream_with_limit(live_id, info)
         # Cek setiap 10 detik untuk memastikan restart cepat
         time.sleep(10)
 
 def save_live_info():
-    with open(live_info_json_path, 'w') as file:
-        json.dump(live_info, file)
+    _atomic_json_write(live_info_json_path, live_info)
 
 # Inisialisasi variabel setelah load_data()
 uploaded_videos = load_uploaded_videos()
 live_info = load_live_info()
 processes = {}
+start_timers = {}
+stop_timers = {}
+data_lock = threading.Lock()
+
+# Konstanta restart otomatis
+RESTART_MAX_ATTEMPTS = 3
+RESTART_WINDOW_SECONDS = 600
+
+
+def cancel_start_timer(live_id):
+    """Batalkan timer jadwal mulai untuk live_id (jika ada)."""
+    timer = start_timers.pop(live_id, None)
+    if timer and timer.is_alive():
+        timer.cancel()
+
+
+def cancel_stop_timer(live_id):
+    """Batalkan timer stop otomatis untuk live_id (jika ada)."""
+    timer = stop_timers.pop(live_id, None)
+    if timer and timer.is_alive():
+        timer.cancel()
+
+
+def kill_process_group(process, timeout=5):
+    """Hentikan proses beserta seluruh child process-nya (cpulimit, ffmpeg)."""
+    try:
+        pgid = os.getpgid(process.pid)
+    except (ProcessLookupError, OSError):
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def kill_orphaned_ffmpeg():
+    """Bunuh ffmpeg zombie yang masih streaming ke YouTube dari server lama
+    (tertinggal saat server di-restart ketika stream masih live)."""
+    killed = 0
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                cmd_parts = proc.info.get('cmdline') or []
+                cmd = ' '.join(cmd_parts)
+                # Cocokkan via nama proses ATAU path/argv ffmpeg di cmdline
+                is_ffmpeg = 'ffmpeg' in name or any(
+                    'ffmpeg' in part for part in cmd_parts
+                )
+                if is_ffmpeg and 'rtmp://a.rtmp.youtube.com/live2' in cmd:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except (ProcessLookupError, OSError):
+                        try:
+                            proc.terminate()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    killed += 1
+                    logging.warning(f"ffmpeg zombie (pid {proc.pid}) dihentikan saat startup.")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception as e:
+        logging.error(f"Error membersihkan ffmpeg zombie: {str(e)}")
+    if killed:
+        logging.warning(f"Total {killed} proses ffmpeg zombie dihentikan saat startup.")
+
+
+def cleanup_stale_logs():
+    """Hapus file log ffmpeg milik stream yang sudah tidak ada."""
+    removed = 0
+    try:
+        for name in os.listdir(uploads_dir):
+            if not (name.startswith('ffmpeg_') and name.endswith('.log')):
+                continue
+            live_id = name[len('ffmpeg_'):-len('.log')]
+            if live_id not in live_info:
+                try:
+                    os.remove(os.path.join(uploads_dir, name))
+                    removed += 1
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    if removed:
+        logging.info(f"{removed} file log ffmpeg lama dibersihkan saat startup.")
+
+
+def cap_log_sizes(max_bytes=5 * 1024 * 1024):
+    """Pangkas file log ffmpeg yang membengkak (cegah disk penuh)."""
+    try:
+        for name in os.listdir(uploads_dir):
+            if not (name.startswith('ffmpeg_') and name.endswith('.log')):
+                continue
+            path = os.path.join(uploads_dir, name)
+            try:
+                if os.path.getsize(path) > max_bytes:
+                    with open(path, 'w'):
+                        pass
+                    logging.warning(f"Log {name} dipangkas karena >5 MB.")
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def sanitize_filename(name):
+    """Bersihkan nama file dari path separator dan karakter berbahaya."""
+    return os.path.basename(str(name).replace('\\', '/')).strip()
+
+
+def record_restart_attempt(live_id):
+    """Catat percobaan restart dan kembalikan jumlah percobaan dalam window."""
+    info = live_info.get(live_id)
+    if not info:
+        return 0
+    now = datetime.now()
+    cutoff = now - timedelta(seconds=RESTART_WINDOW_SECONDS)
+    timestamps = []
+    for ts in info.get('restart_timestamps', []):
+        try:
+            if datetime.fromisoformat(ts) >= cutoff:
+                timestamps.append(ts)
+        except ValueError:
+            pass
+    timestamps.append(now.isoformat())
+    info['restart_timestamps'] = timestamps
+    info['restart_count'] = len(timestamps)
+    save_live_info()
+    return len(timestamps)
+
+
+def video_in_use(filename):
+    """True jika video sedang dipakai stream aktif/terjadwal."""
+    return any(
+        info.get('video') == filename and info.get('status') in ('Active', 'Scheduled')
+        for info in live_info.values()
+    )
+
 
 def update_active_streams():
     for live_id, info in live_info.items():
@@ -218,6 +352,8 @@ def check_and_update_scheduled_streams():
                 run_ffmpeg(live_id, info)
 
 def run_ffmpeg_with_nice(live_id, info):
+    process_started = False
+    log_file = None
     try:
         file_path = os.path.abspath(os.path.join(uploads_dir, info['video']))
         stream_key = info['streamKey']
@@ -229,77 +365,114 @@ def run_ffmpeg_with_nice(live_id, info):
         bufsize = f"{bitrate_value * 2}k"
         maxrate = bitrate
         
+        # Batas CPU adaptif: makin banyak stream aktif, makin kecil limit per stream
+        with process_lock:
+            active_count = sum(
+                1 for p in processes.values() if p.poll() is None
+            ) + 1  # +1 untuk stream yang sedang dimulai
+
         # Gunakan nice untuk mengurangi prioritas proses di Linux
         if platform.system() == 'Linux':
             if cpulimit_available:
-                # Gunakan cpulimit untuk membatasi penggunaan CPU
-                base_command = ["cpulimit", "-l", "150", FFMPEG_PATH]
+                cpu_limit = max(100, 300 // max(1, active_count))
+                base_command = ["cpulimit", "-l", str(cpu_limit), FFMPEG_PATH]
             else:
                 # Gunakan nice jika cpulimit tidak tersedia
                 base_command = ["nice", "-n", "10", FFMPEG_PATH]
         elif platform.system() == 'Darwin':  # macOS
             base_command = ["nice", "-n", "10", FFMPEG_PATH]
         else:
-            # Windows tidak mendukung nice atau cpulimit
             base_command = [FFMPEG_PATH]
         
         # Bangun perintah FFmpeg
         ffmpeg_args = [
             "-loglevel", "warning",
-            "-thread_queue_size", "16384",
+            "-nostdin",
+            "-thread_queue_size", "2048",
             "-stream_loop", "-1", "-re", "-i", file_path,
             "-b:v", bitrate, "-bufsize", bufsize, "-maxrate", maxrate,
             "-f", "flv", "-c:v", "copy", "-c:a", "copy",
             "-flvflags", "no_duration_filesize",
             f"rtmp://a.rtmp.youtube.com/live2/{stream_key}"
         ]
-        
-        # Gabungkan base_command dan ffmpeg_args
         command = base_command + ffmpeg_args
+        
+        # Tulis log ffmpeg ke file agar bisa dilihat via /stream_logs/<id>
+        log_path = os.path.join(uploads_dir, f'ffmpeg_{live_id}.log')
+        log_file = open(log_path, 'w')
         
         # Jalankan perintah tanpa shell=True untuk keamanan
         process = subprocess.Popen(
             command,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
+            stderr=log_file,
             start_new_session=True
         )
+        process_started = True
         
         with process_lock:
-            processes[live_id] = process
+            # Jika stream sudah di-stop/dihapus saat proses ini sedang lahir
+            # (race dengan klik Stop), jangan daftarkan - langsung matikan.
+            if live_id not in live_info or live_info[live_id].get('status') != 'Active':
+                should_abort = True
+            else:
+                processes[live_id] = process
+                should_abort = False
+
+        if should_abort:
+            logging.warning(
+                f"Stream {live_id} sudah berhenti saat proses baru lahir, "
+                f"ffmpeg dimatikan."
+            )
+            kill_process_group(process)
+            return
         
         if duration > 0:
             stop_time = datetime.now() + timedelta(minutes=duration)
             delay = (stop_time - datetime.now()).total_seconds()
             if delay > 5:
-                threading.Timer(delay, stop_stream_manually, args=[live_id, True, True]).start()
-                send_telegram_notification(f"⏳ Live '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
+                cancel_stop_timer(live_id)
+                stop_timers[live_id] = threading.Timer(
+                    delay, stop_stream_manually, args=[live_id, True, True]
+                )
+                stop_timers[live_id].start()
+                logging.info(f"Live '{info['title']}' akan berhenti otomatis dalam {duration} menit.")
         
         # Untuk stream jangka panjang, tambahkan log bahwa stream telah dimulai
         if duration == 0:
             logging.info(f"Stream jangka panjang '{info['title']}' telah dimulai (ID: {live_id})")
-            send_telegram_notification(f"🚀 Stream jangka panjang '{info['title']}' telah dimulai dan akan berjalan terus menerus")
         
         # Simpan waktu mulai untuk monitoring
-        live_info[live_id]['start_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        save_live_info()
+        if live_id in live_info:
+            live_info[live_id]['start_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_live_info()
         
         # Tunggu proses selesai (ini akan memblokir sampai proses berakhir)
         process.wait()
         
     except Exception as e:
         logging.error(f"FFmpeg error in run_ffmpeg_with_nice: {str(e)}")
-        send_telegram_notification(f"🚨 GAGAL menjalankan live '{info['title']}': {str(e)}")
+        if not process_started and live_id in live_info and live_info[live_id].get('status') == 'Active':
+            # Gagal sebelum proses jalan: jangan biarkan status menggantung di 'Active'
+            live_info[live_id]['status'] = 'Stopped'
+            save_live_info()
+    finally:
+        if log_file:
+            log_file.close()
 
 def run_ffmpeg(live_id, info):
     try:
         logging.debug(f"Starting FFmpeg for live_id: {live_id} with info: {info}")
-        if live_info[live_id]['status'] == 'Scheduled':
-            send_telegram_notification(f"🎥 Live terjadwal '{info['title']}' TELAH DIMULAI!")
-        else:
-            send_telegram_notification(f"🎥 Live '{info['title']}' TELAH AKTIF!")
+        # Cegah start ganda: kalau proses sudah berjalan, abaikan panggilan ini
+        with process_lock:
+            existing = processes.get(live_id)
+        if existing is not None and existing.poll() is None:
+            logging.debug(f"Stream {live_id} sudah berjalan, start duplikat dilewati.")
+            return
+
+        cancel_start_timer(live_id)
+        cancel_stop_timer(live_id)
 
         if live_id in live_info:
             live_info[live_id]['status'] = 'Active'
@@ -312,39 +485,27 @@ def run_ffmpeg(live_id, info):
 
     except Exception as e:
         logging.error(f"FFmpeg error: {str(e)}")
-        send_telegram_notification(f"🚨 GAGAL memulai live '{info['title']}': {str(e)}")
 
 def stop_stream_manually(live_id, is_scheduled=False, force=False):
     logging.debug(f"Attempting to stop stream manually for live_id: {live_id}, force={force}")
+    cancel_start_timer(live_id)
+    cancel_stop_timer(live_id)
+
     with process_lock:
         process = processes.pop(live_id, None)
+        # Set status 'Stopped' SEBELUM membunuh proses, di dalam lock yang sama
+        # dengan registrasi proses baru: mencegah restart_if_needed atau proses
+        # restart yang sedang lahir menyalakan ulang stream ini (race condition).
+        if live_id in live_info:
+            live_info[live_id]['status'] = 'Stopped'
+            save_live_info()
 
     if process and process.poll() is None:
-        # Hentikan proses dengan benar
-        try:
-            if platform.system() == 'Windows':
-                # Windows menggunakan os.kill dengan sinyal CTRL_C_EVENT
-                os.kill(process.pid, signal.CTRL_C_EVENT)
-            else:
-                # Unix menggunakan os.killpg
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            
-            process.wait(timeout=5)
-        except Exception as e:
-            logging.error(f"Error stopping process: {str(e)}")
-            try:
-                process.terminate()
-                process.wait(timeout=5)
-            except:
-                pass
+        kill_process_group(process)
 
     if live_id in live_info:
-        live_info[live_id]['status'] = 'Stopped'
-        save_live_info()
-
-    title = live_info[live_id]['title']
-    message = f"⏰ Live terjadwal '{title}' BERHENTI sesuai jadwal" if is_scheduled else f"⛔ Live '{title}' DIHENTIKAN manual"
-    send_telegram_notification(message)
+        title = live_info[live_id].get('title', 'Stream')
+        logging.info(f"Stream '{title}' dihentikan (is_scheduled={is_scheduled}, force={force})")
 
 @app.route('/update_start_schedule/<id>', methods=['POST'])
 @login_required
@@ -372,16 +533,17 @@ def update_start_schedule(id):
             live_info[id]['startTime'] = formatted_time
             save_live_info()
             
-            # Batalkan timer lama jika ada
-            # (Ini memerlukan tracking timer, yang bisa ditambahkan jika diperlukan)
+            # Batalkan timer lama sebelum membuat yang baru (mencegah start ganda)
+            cancel_start_timer(id)
             
             # Buat timer baru untuk memulai stream pada waktu yang dijadwalkan
             schedule_time = datetime.strptime(formatted_time, "%Y-%m-%d %H:%M:%S")
             delay = max(0, (schedule_time - datetime.now()).total_seconds())
             
             if delay > 0:
-                threading.Timer(delay, run_ffmpeg, args=[id, live_info[id]]).start()
-                send_telegram_notification(f"✅ Live '{live_info[id]['title']}' dijadwalkan untuk mulai pada {formatted_time}.")
+                start_timers[id] = threading.Timer(delay, run_ffmpeg, args=[id, live_info[id]])
+                start_timers[id].start()
+                logging.info(f"Live '{live_info[id]['title']}' dijadwalkan mulai pada {formatted_time}.")
                 return jsonify({'message': f'Jadwal mulai diperbarui! Stream akan dimulai pada {formatted_time}'})
             else:
                 # Jika waktu sudah lewat, mulai stream sekarang
@@ -405,15 +567,22 @@ def update_stop_schedule(id):
     try:
         data = request.json
         duration = int(data.get('duration', 0))
+        if duration < 0 or duration > 2880:
+            return jsonify({'message': 'Durasi harus antara 0-2880 menit'}), 400
+
         live_info[id]['duration'] = duration
         save_live_info()
+
+        # Batalkan timer stop lama: durasi baru menggantikan jadwal lama
+        cancel_stop_timer(id)
 
         if id in processes and duration > 0:
             stop_time = datetime.now() + timedelta(minutes=duration)
             delay = (stop_time - datetime.now()).total_seconds()
             if delay > 5:
-                threading.Timer(delay, stop_stream_manually, args=[id, True, True]).start()
-                send_telegram_notification(f"⏳ Live '{live_info[id]['title']}' diperbarui, akan berhenti dalam {duration} menit.")
+                stop_timers[id] = threading.Timer(delay, stop_stream_manually, args=[id, True, True])
+                stop_timers[id].start()
+                logging.info(f"Live '{live_info[id]['title']}' akan berhenti dalam {duration} menit.")
 
         return jsonify({'message': 'Jadwal stop otomatis diperbarui!'})
     except Exception as e:
@@ -431,7 +600,8 @@ def periodic_check():
 
 def monitor_stream_health():
     while True:
-        restart_counts = {}
+        # Pangkas log ffmpeg yang membengkak agar disk tidak penuh
+        cap_log_sizes()
         current_time = datetime.now()
         
         for live_id, info in live_info.items():
@@ -441,9 +611,12 @@ def monitor_stream_health():
                     start_time = datetime.strptime(info['start_time'], "%Y-%m-%d %H:%M:%S")
                     uptime_hours = (current_time - start_time).total_seconds() / 3600
                     
-                    # Kirim notifikasi setiap 24 jam untuk stream jangka panjang
-                    if uptime_hours > 24 and uptime_hours % 24 < 1:
-                        send_telegram_notification(f"🕒 Live '{info['title']}' telah berjalan selama {int(uptime_hours)} jam")
+                    # Log setiap kelipatan 24 jam untuk stream jangka panjang (sekali per hari)
+                    day_marker = int(uptime_hours // 24)
+                    if day_marker > info.get('last_24h_notify', 0):
+                        info['last_24h_notify'] = day_marker
+                        save_live_info()
+                        logging.info(f"Live '{info['title']}' telah berjalan selama {int(uptime_hours)} jam")
                 except Exception as e:
                     logging.error(f"Error calculating uptime: {str(e)}")
         
@@ -465,9 +638,7 @@ def monitor_resource_usage():
             
             # Peringatan jika resource usage tinggi
             if cpu_percent > 90 or memory_percent > 90:
-                message = f"⚠️ Peringatan: Penggunaan resource tinggi - CPU: {cpu_percent}%, Memory: {memory_percent}%"
-                logging.warning(message)
-                send_telegram_notification(message)
+                logging.warning(f"Penggunaan resource tinggi - CPU: {cpu_percent}%, Memory: {memory_percent}%")
                 
                 # Jika memory sangat tinggi, hentikan stream yang paling tidak penting
                 if memory_percent > 95:
@@ -477,27 +648,33 @@ def monitor_resource_usage():
                     
                     if active_streams:
                         # Urutkan berdasarkan prioritas (jika ada) atau restart_count
-                        sorted_streams = sorted(active_streams, 
-                                              key=lambda x: x[1].get('priority', 0) or x[1].get('restart_count', 0))
+                        sorted_streams = sorted(active_streams, key=lambda x: x[1].get('priority', 5))
                         
                         # Hentikan stream dengan prioritas terendah
                         if sorted_streams:
                             low_priority_id = sorted_streams[0][0]
                             stop_stream_manually(low_priority_id, force=True)
-                            send_telegram_notification(f"🛑 Memory hampir penuh ({memory_percent}%). Stream '{live_info[low_priority_id]['title']}' dihentikan otomatis.")
+                            logging.warning(
+                                f"Memory hampir penuh ({memory_percent}%). Stream '{live_info[low_priority_id]['title']}' dihentikan otomatis."
+                            )
+
+            # Peringatan kapasitas disk (cegah disk penuh)
+            try:
+                disk = psutil.disk_usage(uploads_dir)
+                if disk.percent > 90:
+                    logging.warning(
+                        f"Kapasitas disk {disk.percent}% terpakai "
+                        f"({disk.free // (1024 ** 3)} GB bebas). "
+                        f"Hapus video/log yang tidak terpakai."
+                    )
+            except OSError:
+                pass
         except Exception as e:
             logging.error(f"Error in resource monitoring: {str(e)}")
 
-def format_size(size):
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size < 1024:
-            return f"{size:.2f} {unit}"
-        size /= 1024
-    return f"{size:.2f} TB"
-
 def get_file_name_from_google_drive_url(url):
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         title = soup.title.string
         if title and "Google Drive" in title:
@@ -506,6 +683,60 @@ def get_file_name_from_google_drive_url(url):
     except Exception as e:
         logging.error(f"Failed to get filename from Google Drive: {str(e)}")
         return f"downloaded_video_{uuid.uuid4().hex[:8]}.mp4"
+
+# Konstanta retry download Google Drive
+DOWNLOAD_MAX_ATTEMPTS = 3
+DOWNLOAD_RETRY_DELAY = 15  # detik
+
+
+def friendly_drive_error(detail):
+    """Ubah pesan error gdown menjadi penjelasan yang mudah dipahami pengguna."""
+    detail_lower = (detail or '').lower()
+    if 'permission' in detail_lower and 'many accesses' in detail_lower:
+        return ('Google Drive menolak download. Ada 2 kemungkinan penyebab: '
+                '(1) file belum di-share sebagai "Anyone with the link" (Viewer), '
+                'atau (2) URL Google Drive terkena limit download (file sering '
+                'diunduh atau IP server diblokir Google). '
+                'Solusi: set sharing file ke "Anyone with the link", atau '
+                'gunakan URL dari Google Drive lain, lalu coba lagi.')
+    if 'permission' in detail_lower or 'public link' in detail_lower:
+        return ('Google Drive menolak download. Pastikan file di-share sebagai '
+                '"Anyone with the link" (Viewer), lalu coba lagi. '
+                'Jika sudah di-share, kemungkinan URL terkena limit download - '
+                'gunakan URL dari Google Drive lain.')
+    if '429' in detail_lower or 'many accesses' in detail_lower or 'too many' in detail_lower:
+        return ('URL Google Drive terkena limit download (rate limit / 429). '
+                'Biasanya terjadi jika file sering diunduh atau IP server '
+                'diblokir Google. Solusi: gunakan URL dari Google Drive lain, '
+                'tunggu beberapa saat, atau unduh dari koneksi/IP lain (mis. laptop).')
+    return ('Gagal mengunduh dari Google Drive. Periksa: (1) link sudah benar, '
+            '(2) file di-share "Anyone with the link", (3) jaringan server bisa '
+            'mengakses Google. Detail: ' + str(detail))
+
+
+def download_from_google_drive(file_url, output_path):
+    """Download dari Google Drive dengan retry + backoff. Return (success, pesan_error)."""
+    last_error = None
+    for attempt in range(1, DOWNLOAD_MAX_ATTEMPTS + 1):
+        # Bersihkan file parsial dari percobaan sebelumnya
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except OSError:
+            pass
+        try:
+            result = gdown.download(url=file_url, output=output_path, quiet=False, fuzzy=True)
+            if result is not None and os.path.exists(output_path):
+                return True, None
+            last_error = last_error or 'Google Drive menolak download (tanpa detail)'
+        except Exception as e:
+            last_error = str(e)
+            logging.warning(f"gdown percobaan {attempt}/{DOWNLOAD_MAX_ATTEMPTS} gagal: {str(e)}")
+        if attempt < DOWNLOAD_MAX_ATTEMPTS:
+            logging.info(f"Coba lagi dalam {DOWNLOAD_RETRY_DELAY} detik...")
+            time.sleep(DOWNLOAD_RETRY_DELAY)
+    return False, friendly_drive_error(last_error)
+
 
 @app.route('/')
 @login_required
@@ -539,39 +770,58 @@ def start_stream():
         cpu_percent = psutil.cpu_percent(interval=1)
         memory_percent = psutil.virtual_memory().percent
         
+        # Validasi bitrate dan durasi
+        bitrate = str(bitrate).strip().lower() if bitrate else ''
+        if bitrate:
+            try:
+                bitrate_value = int(bitrate.replace('k', ''))
+                bitrate = f'{bitrate_value}k'
+            except ValueError:
+                return jsonify({'message': 'Bitrate tidak valid (contoh: 2500)'}), 400
+        else:
+            bitrate = '2500k'
+
+        duration = int(duration) if duration else 0
+        if duration < 0 or duration > 2880:
+            return jsonify({'message': 'Durasi harus antara 0-2880 menit'}), 400
+
+        priority = int(priority) if str(priority).isdigit() else 5
+
         # Peringatan jika sudah banyak stream aktif atau resource tinggi
         warning_message = None
         if active_streams >= 3:
-            warning_message = f"⚠️ Peringatan: Sudah ada {active_streams} stream aktif. Menambahkan stream baru mungkin akan mempengaruhi performa."
+            warning_message = f"Peringatan: Sudah ada {active_streams} stream aktif. Menambahkan stream baru mungkin akan mempengaruhi performa."
         elif cpu_percent > 80 or memory_percent > 80:
-            warning_message = f"⚠️ Peringatan: Resource sistem tinggi (CPU: {cpu_percent}%, Memory: {memory_percent}%). Menambahkan stream baru mungkin akan mempengaruhi performa."
+            warning_message = f"Peringatan: Resource sistem tinggi (CPU: {cpu_percent}%, Memory: {memory_percent}%). Menambahkan stream baru mungkin akan mempengaruhi performa."
         
         if warning_message:
-            send_telegram_notification(warning_message)
+            logging.warning(warning_message)
 
         live_id = str(uuid.uuid4())
-        live_info[live_id] = {
-            'title': title,
-            'video': video_filename,
-            'streamKey': stream_key,
-            'status': 'Scheduled' if schedule_date else 'Pending',
-            'startTime': schedule_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'bitrate': f'{bitrate}k' if bitrate else '2500k',  # Default 2500k
-            'duration': int(duration) if duration else 0,
-            'priority': int(priority),
-            'restart_count': 0,
-            'restart_timestamps': []
-        }
-        save_live_info()
+        with data_lock:
+            live_info[live_id] = {
+                'title': title,
+                'video': video_filename,
+                'streamKey': stream_key,
+                'status': 'Scheduled' if schedule_date else 'Pending',
+                'startTime': schedule_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'bitrate': bitrate,
+                'duration': duration,
+                'priority': priority,
+                'restart_count': 0,
+                'restart_timestamps': []
+            }
+            save_live_info()
 
         if schedule_date:
             schedule_time = datetime.strptime(schedule_date, "%Y-%m-%dT%H:%M")
             delay = max(0, (schedule_time - datetime.now()).total_seconds())
-            threading.Timer(delay, run_ffmpeg, args=[live_id, live_info[live_id]]).start()
-            send_telegram_notification(f"✅ Live terjadwal '{title}' akan dimulai pada {schedule_date}.")
+            start_timers[live_id] = threading.Timer(delay, run_ffmpeg, args=[live_id, live_info[live_id]])
+            start_timers[live_id].start()
+            logging.info(f"Live terjadwal '{title}' akan dimulai pada {schedule_date}.")
         else:
             threading.Thread(target=run_ffmpeg, args=[live_id, live_info[live_id]]).start()
-            send_telegram_notification(f"✅ Live '{title}' telah dimulai.")
+            logging.info(f"Live '{title}' telah dimulai.")
 
         return jsonify({
             'message': 'Stream scheduled' if schedule_date else 'Stream started',
@@ -603,19 +853,22 @@ def update_bitrate(id):
         return jsonify({'message': 'Live info not found!'}), 404
 
     try:
-        bitrate = request.json['bitrate']
+        bitrate = str(request.json['bitrate']).strip().lower()
         if not bitrate:
             return jsonify({'message': 'Bitrate is required'}), 400
+        try:
+            bitrate_value = int(bitrate.replace('k', ''))
+        except ValueError:
+            return jsonify({'message': 'Bitrate tidak valid (contoh: 2500)'}), 400
 
-        live_info[id]['bitrate'] = f'{bitrate}k'
+        live_info[id]['bitrate'] = f'{bitrate_value}k'
         save_live_info()
 
         if id in processes:
-            process = processes[id]
-            process.terminate()
-            process.wait(timeout=10)
             with process_lock:
-                del processes[id]
+                process = processes.pop(id, None)
+            if process and process.poll() is None:
+                kill_process_group(process)
             threading.Thread(target=run_ffmpeg, args=[id, live_info[id]]).start()
 
         return jsonify({'message': 'Bitrate updated successfully! Stream restarted.'})
@@ -626,7 +879,7 @@ def update_bitrate(id):
 @app.route('/stream_logs/<id>')
 @login_required
 def stream_logs(id):
-    log_file = f'ffmpeg_{id}.log'
+    log_file = os.path.join(uploads_dir, f'ffmpeg_{id}.log')
     if not os.path.exists(log_file):
         return jsonify({'message': 'Log file not found'}), 404
         
@@ -643,13 +896,10 @@ def restart_stream(id):
 
     try:
         info = live_info[id]
-        if id in processes:
-            old_process = processes[id]
-            if old_process.poll() is None:
-                old_process.terminate()
-                old_process.wait(timeout=10)
-            with process_lock:
-                del processes[id]
+        with process_lock:
+            old_process = processes.pop(id, None)
+        if old_process and old_process.poll() is None:
+            kill_process_group(old_process)
 
         threading.Thread(target=run_ffmpeg, args=[id, info]).start()
         return jsonify({'message': 'Stream berhasil di-restart!'})
@@ -665,15 +915,24 @@ def delete_stream(id):
         return jsonify({'message': 'Live info not found!'}), 404
 
     try:
-        if id in processes:
-            process = processes[id]
-            process.terminate()
-            process.wait()
-            with process_lock:
-                del processes[id]
+        cancel_start_timer(id)
+        cancel_stop_timer(id)
 
-        del live_info[id]
-        save_live_info()
+        with process_lock:
+            process = processes.pop(id, None)
+        if process and process.poll() is None:
+            kill_process_group(process)
+
+        with data_lock:
+            del live_info[id]
+            save_live_info()
+
+        # Hapus file log ffmpeg yang sudah tidak terpakai
+        try:
+            os.remove(os.path.join(uploads_dir, f'ffmpeg_{id}.log'))
+        except OSError:
+            pass
+
         return jsonify({'message': 'Streaming deleted successfully!'})
     except Exception as e:
         logging.error(f"Error: {str(e)}")
@@ -692,9 +951,19 @@ def get_live_info(id):
     if id not in live_info:
         return jsonify({'message': 'Live info not found!'}), 404
     
-    info = live_info[id]
+    info = dict(live_info[id])
     info['id'] = id
-    info['video_name'] = info['video'].split('_', 1)[-1]
+    name = info.get('video', '')
+    parts = name.split('_', 1)
+    video_name = name
+    if len(parts) > 1:
+        try:
+            # Awalan uuid (dengan atau tanpa strip) -> ambil nama file aslinya
+            uuid.UUID(parts[0])
+            video_name = parts[1]
+        except ValueError:
+            pass
+    info['video_name'] = video_name
     
     # Tambahkan informasi uptime jika ada
     if 'start_time' in info and info['status'] == 'Active':
@@ -724,22 +993,26 @@ def get_live_info(id):
 @app.route('/all_live_info')
 @login_required
 def all_live_info():
-    # Tambahkan informasi uptime untuk semua stream aktif
+    # Tambahkan id dan informasi uptime untuk semua stream (tanpa memutasi data asli)
     current_time = datetime.now()
-    for info in live_info.values():
-        if 'start_time' in info and info['status'] == 'Active':
+    result = []
+    for live_id, info in live_info.items():
+        item = dict(info)
+        item['id'] = live_id
+        if 'start_time' in item and item['status'] == 'Active':
             try:
-                start_time = datetime.strptime(info['start_time'], "%Y-%m-%d %H:%M:%S")
+                start_time = datetime.strptime(item['start_time'], "%Y-%m-%d %H:%M:%S")
                 uptime = current_time - start_time
                 days = uptime.days
                 hours, remainder = divmod(uptime.seconds, 3600)
                 minutes, seconds = divmod(remainder, 60)
-                info['uptime'] = f"{days} hari, {hours} jam, {minutes} menit"
+                item['uptime'] = f"{days} hari, {hours} jam, {minutes} menit"
             except Exception as e:
                 logging.error(f"Error calculating uptime: {str(e)}")
-                info['uptime'] = "Tidak tersedia"
+                item['uptime'] = "Tidak tersedia"
+        result.append(item)
     
-    return jsonify(list(live_info.values()))
+    return jsonify(result)
 
 @app.route('/live_list')
 @login_required
@@ -766,20 +1039,30 @@ def live_list():
 def upload_video():
     if request.method == 'POST':
         try:
+            file_path = None
             file_url = request.json['file_url']
-            original_name = get_file_name_from_google_drive_url(file_url)
+            # Hanya izinkan URL Google Drive untuk mencegah SSRF/download arbitrer
+            if not file_url or ('drive.google.com' not in file_url and 'docs.google.com' not in file_url):
+                return jsonify({'success': False, 'message': 'URL harus dari Google Drive'}), 400
+
+            original_name = sanitize_filename(get_file_name_from_google_drive_url(file_url))
             unique_filename = f"{uuid.uuid4()}_{original_name}"
             file_path = os.path.join(uploads_dir, unique_filename)
-            gdown.download(url=file_url, output=file_path, quiet=False, fuzzy=True)
+
+            # Download dengan retry; helper sudah membersihkan file parsial
+            success, error_msg = download_from_google_drive(file_url, file_path)
+            if not success:
+                return jsonify({'success': False, 'message': error_msg}), 500
 
             file_size = os.path.getsize(file_path)
-            uploaded_videos.append({
-                'filename': unique_filename,
-                'original_name': original_name,
-                'size': format_size(file_size),
-                'upload_date': datetime.now().strftime("%Y-%m-%d")
-            })
-            save_uploaded_videos()
+            with data_lock:
+                uploaded_videos.append({
+                    'filename': unique_filename,
+                    'original_name': original_name,
+                    'size': format_size(file_size),
+                    'upload_date': datetime.now().strftime("%Y-%m-%d")
+                })
+                save_uploaded_videos()
 
             return jsonify({
                 'success': True,
@@ -788,7 +1071,13 @@ def upload_video():
             })
         except Exception as e:
             logging.error(f"Error: {str(e)}")
-            return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
+            # Bersihkan file parsial yang gagal ter-download
+            try:
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
+            except OSError:
+                pass
+            return jsonify({'success': False, 'message': 'Gagal mengunduh video: ' + str(e)}), 500
     return render_template('upload_video.html', title='Upload Video', videos=uploaded_videos)
 
 @app.route('/uploads/<filename>')
@@ -805,22 +1094,35 @@ def get_uploaded_videos():
 @login_required
 def rename_video():
     try:
-        old_filename = request.json['old_filename']
-        new_filename = request.json['new_filename']
+        old_filename = sanitize_filename(request.json['old_filename'])
+        new_filename = sanitize_filename(request.json['new_filename'])
+        if not old_filename or not new_filename:
+            return jsonify({'success': False, 'message': 'Nama file tidak valid'}), 400
+        if new_filename == old_filename:
+            return jsonify({'success': False, 'message': 'Nama baru sama dengan nama lama'}), 400
         if not new_filename.lower().endswith(".mp4"):
             new_filename += ".mp4"
 
+        # Jangan izinkan rename video yang sedang dipakai stream aktif/terjadwal
+        if video_in_use(old_filename):
+            return jsonify({'success': False, 'message': 'Video sedang dipakai stream aktif/terjadwal'}), 400
+
         old_file_path = os.path.join(uploads_dir, old_filename)
         new_file_path = os.path.join(uploads_dir, new_filename)
+        if not os.path.exists(old_file_path):
+            return jsonify({'success': False, 'message': 'File tidak ditemukan'}), 404
+        if os.path.exists(new_file_path):
+            return jsonify({'success': False, 'message': 'Nama file sudah dipakai video lain'}), 400
         os.rename(old_file_path, new_file_path)
 
-        for video in uploaded_videos:
-            if video['filename'] == old_filename:
-                video['filename'] = new_filename
-                video['original_name'] = new_filename
-                break
+        with data_lock:
+            for video in uploaded_videos:
+                if video['filename'] == old_filename:
+                    video['filename'] = new_filename
+                    video['original_name'] = new_filename
+                    break
+            save_uploaded_videos()
 
-        save_uploaded_videos()
         return jsonify({
             'success': True,
             'message': 'Video renamed successfully!',
@@ -834,13 +1136,23 @@ def rename_video():
 @login_required
 def delete_video():
     try:
-        filename = request.json['filename']
+        filename = sanitize_filename(request.json['filename'])
+        if not filename:
+            return jsonify({'success': False, 'message': 'Nama file tidak valid'}), 400
+
+        # Jangan izinkan hapus video yang sedang dipakai stream aktif/terjadwal
+        if video_in_use(filename):
+            return jsonify({'success': False, 'message': 'Video sedang dipakai stream aktif/terjadwal'}), 400
+
         file_path = os.path.join(uploads_dir, filename)
+        if not os.path.exists(file_path):
+            return jsonify({'success': False, 'message': 'File tidak ditemukan'}), 404
         os.remove(file_path)
 
         global uploaded_videos
-        uploaded_videos = [video for video in uploaded_videos if video['filename'] != filename]
-        save_uploaded_videos()
+        with data_lock:
+            uploaded_videos = [video for video in uploaded_videos if video['filename'] != filename]
+            save_uploaded_videos()
 
         return jsonify({'success': True, 'message': 'Video deleted successfully!', 'videos': uploaded_videos})
     except Exception as e:
@@ -897,17 +1209,6 @@ def system_info():
 
 if not os.path.exists(uploads_dir):
     os.makedirs(uploads_dir)
-
-def send_telegram_notification(message):
-    # Gunakan variabel global yang sudah dimuat
-    if telegram_bot_token and telegram_chat_id:
-        url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
-        payload = {"chat_id": telegram_chat_id, "text": message}
-        try:
-            response = requests.post(url, json=payload)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Failed to send Telegram notification: {e}")
 
 # Gunakan lock untuk thread-safe pada pengukuran jaringan
 net_lock = threading.Lock()
@@ -967,7 +1268,7 @@ def format_size(size):
     # Convert to float if it's integer
     size = float(size)
     
-    units = ['B', 'KB', 'MB', 'GB']
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
     unit_index = 0
     
     while size >= 1024 and unit_index < len(units)-1:
@@ -976,32 +1277,12 @@ def format_size(size):
         
     return f"{size:.1f} {units[unit_index]}"
 
-@app.route('/set_telegram_bot', methods=['POST'])
-@login_required
-def set_telegram_bot():
-    data = request.json
-    bot_token = data.get('botToken')
-    chat_id = data.get('chatId')
-    if not bot_token or not chat_id:
-        return jsonify({'message': 'Bot token and chat ID are required!'}), 400
-
-    save_apibot_settings(bot_token, chat_id)
-    
-    # Perbarui variabel global setelah menyimpan
-    global telegram_bot_token, telegram_chat_id
-    telegram_bot_token = bot_token
-    telegram_chat_id = chat_id
-    
-    return jsonify({'message': 'Telegram bot settings saved successfully!'})
-
-@app.route('/telegram_bot')
-@login_required
-def telegram_bot():
-    settings = load_apibot_settings()
-    return render_template('telegrambot.html', botToken=settings.get('botToken', ''), chatId=settings.get('chatId', ''))
-
 # Pastikan semua streaming aktif ditandai sebagai stopped saat startup
 stop_all_active_streams()
+# Bunuh ffmpeg zombie yang tertinggal dari server lama (restart saat stream live)
+kill_orphaned_ffmpeg()
+# Bersihkan file log ffmpeg milik stream yang sudah tidak ada
+cleanup_stale_logs()
 
 # Mulai pengecekan berkala untuk streaming terjadwal
 periodic_check()
@@ -1016,4 +1297,10 @@ threading.Thread(target=monitor_stream_health, daemon=True).start()
 threading.Thread(target=monitor_resource_usage, daemon=True).start()
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    try:
+        from waitress import serve
+        # Server produksi (thread pool) - lebih kuat untuk banyak klien & polling
+        serve(app, host='0.0.0.0', port=5000, threads=32)
+    except ImportError:
+        # Fallback: server dev Flask (untuk pengembangan lokal)
+        app.run(debug=False, host='0.0.0.0', port=5000)

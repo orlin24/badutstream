@@ -1,43 +1,45 @@
-{% extends "layout.html" %} {% block content %}
-<div class="container mt-4">
-  <!-- Header Section -->
-  <div class="d-flex justify-content-between align-items-center mb-4">
-    <h1 class="text-primary">
-      <i class="bi bi-broadcast me-2"></i>Detail Live Streaming
-    </h1>
-    <a href="/live_list" class="btn btn-outline-secondary">
-      <i class="bi bi-arrow-left me-2"></i>Kembali ke Daftar
-    </a>
-  </div>
-
-  <!-- Main Card -->
-  <div class="card border-dark shadow-lg">
-    <div class="card-header bg-dark text-white py-3">
-      <h4 class="mb-0">
-        <i class="bi bi-info-circle me-2"></i>Informasi Stream
-      </h4>
+{% extends "layout.html" %}
+{% block content %}
+<div
+  class="page-title d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3"
+>
+  <div class="d-flex align-items-center gap-3">
+    <span class="page-icon"><i class="bi bi-broadcast"></i></span>
+    <div>
+      <h1 class="h3 mb-0 fw-bold">Detail Live Streaming</h1>
+      <p class="text-body-secondary mb-0">
+        Kelola jadwal, status, dan aksi stream ini.
+      </p>
     </div>
+  </div>
+  <a href="/live_list" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i>Kembali ke Daftar
+  </a>
+</div>
 
-    <div class="card-body bg-secondary bg-opacity-10">
-      <!-- Dynamic Content Container -->
-      <div id="liveContainer">
-        <div class="text-center py-5">
-          <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">Memuat...</span>
-          </div>
-          <p class="text-muted mt-3">Memuat informasi stream...</p>
+<div class="card border-0 shadow-sm">
+  <div class="card-header bg-body-tertiary">
+    <h4 class="mb-0">
+      <i class="bi bi-info-circle me-2"></i>Informasi Stream
+    </h4>
+  </div>
+  <div class="card-body">
+    <div id="liveContainer">
+      <div class="text-center py-5">
+        <div class="spinner-border text-primary" role="status">
+          <span class="visually-hidden">Memuat...</span>
         </div>
+        <p class="text-body-secondary mt-3">Memuat informasi stream...</p>
       </div>
-
-      <!-- Response Messages -->
-      <div id="response" class="mt-4"></div>
     </div>
   </div>
 </div>
 
+<div id="response"></div>
+
 <script>
   // =====================
-  // INITIALIZATION
+  // INISIALISASI
   // =====================
   document.addEventListener("DOMContentLoaded", () => {
     const liveId = getLiveIdFromURL();
@@ -50,14 +52,10 @@
     initializeLiveInfo(liveId);
   });
 
-  // =====================
-  // CORE FUNCTIONS
-  // =====================
   function initializeLiveInfo(liveId) {
     loadLiveInfo(liveId);
     const statusInterval = setInterval(() => updateLiveStatus(liveId), 5000);
 
-    // Cleanup interval on page leave
     window.addEventListener("beforeunload", () => {
       clearInterval(statusInterval);
     });
@@ -76,24 +74,20 @@
   }
 
   // =====================
-  // RENDER FUNCTIONS
+  // RENDER
   // =====================
   function renderLiveInfo(data) {
     const durationText = data.duration
       ? `${data.duration} menit`
       : "Tidak ada stop otomatis";
     const bitrateText = data.bitrate
-      ? `${data.bitrate} kbps`
+      ? `${String(data.bitrate).replace(/k$/i, "")} kbps`
       : "5000 kbps (Default)";
 
-    // Format start time for display
-    let formattedStartTime = data.formatted_start || data.startTime;
-
-    // Determine if we should show schedule controls based on status
+    const formattedStartTime = data.formatted_start || data.startTime;
     const showScheduleControls =
       data.status === "Stopped" || data.status === "Scheduled";
 
-    // Parse current start time for the datetime-local input
     let currentStartTime = "";
     try {
       if (data.startTime) {
@@ -103,9 +97,9 @@
         } else {
           dt = new Date(data.startTime.replace(" ", "T"));
         }
-
-        // Format for datetime-local input (YYYY-MM-DDThh:mm)
-        currentStartTime = dt.toISOString().slice(0, 16);
+        // Format untuk datetime-local (YYYY-MM-DDThh:mm) pakai waktu LOKAL,
+        // bukan UTC (toISOString menggeser jam sesuai zona waktu browser)
+        currentStartTime = toLocalInputValue(dt);
       }
     } catch (e) {
       console.error("Error parsing date:", e);
@@ -113,162 +107,166 @@
     }
 
     const template = `
-            <div class="row g-4">
-                <!-- Metadata Section -->
-                <div class="col-md-6">
-                    <div class="p-3 bg-dark rounded">
-                        <h5 class="text-primary mb-3">
-                            <i class="bi bi-card-text me-2"></i>Metadata Stream
-                        </h5>
-                        <dl class="row text-light">
-                            <dt class="col-sm-4">Judul</dt>
-                            <dd class="col-sm-8">${data.title}</dd>
+      <div class="row g-4">
+        <!-- Metadata -->
+        <div class="col-md-6">
+          <div class="bg-body-tertiary rounded-3 p-3 h-100">
+            <h5 class="text-primary mb-3">
+              <i class="bi bi-card-text me-2"></i>Metadata Stream
+            </h5>
+            <dl class="row mb-0">
+              <dt class="col-sm-4 text-body-secondary">Judul</dt>
+              <dd class="col-sm-8">${data.title}</dd>
 
-                            <dt class="col-sm-4">ID Stream</dt>
-                            <dd class="col-sm-8">${data.id}</dd>
+              <dt class="col-sm-4 text-body-secondary">ID Stream</dt>
+              <dd class="col-sm-8 text-break">${data.id}</dd>
 
-                            <dt class="col-sm-4">Bitrate</dt>
-                            <dd class="col-sm-8">${bitrateText}</dd>
+              <dt class="col-sm-4 text-body-secondary">Bitrate</dt>
+              <dd class="col-sm-8">${bitrateText}</dd>
 
-                            <dt class="col-sm-4">Stop Otomatis</dt>
-                            <dd class="col-sm-8">${durationText}</dd>
+              <dt class="col-sm-4 text-body-secondary">Stop Otomatis</dt>
+              <dd class="col-sm-8">${durationText}</dd>
 
-                            <dt class="col-sm-4">Video Source</dt>
-                            <dd class="col-sm-8">
-                                <span class="badge bg-info">${
-                                  data.video_name
-                                }</span>
-                            </dd>
-                        </dl>
-                    </div>
-                </div>
+              <dt class="col-sm-4 text-body-secondary">Video Source</dt>
+              <dd class="col-sm-8">
+                <span class="badge text-bg-info video-badge" title="${data.video_name}">${data.video_name}</span>
+              </dd>
+            </dl>
+          </div>
+        </div>
 
-                <!-- Status & Schedule Section -->
-                <div class="col-md-6">
-                    <div class="p-3 bg-dark rounded">
-                        <h5 class="text-primary mb-3">
-                            <i class="bi bi-activity me-2"></i>Status Stream
-                        </h5>
-                        <div class="row text-light">
-                            <div class="col-6">
-                                <p class="mb-1">Status:</p>
-                                <span id="statusBadge" class="badge ${getStatusStyle(
-                                  data.status
-                                )}">
-                                    ${data.status}
-                                </span>
-                            </div>
-                            <div class="col-6">
-                                <p class="mb-1">Mulai:</p>
-                                <span class="text-warning">${formattedStartTime}</span>
-                            </div>
-                        </div>
-
-                        <hr class="my-4">
-
-                        <!-- Automatic Start Schedule Section -->
-                        ${
-                          showScheduleControls
-                            ? `
-                        <h5 class="text-primary mb-3">
-                            <i class="bi bi-calendar-check me-2"></i>Atur Jadwal Otomatis
-                        </h5>
-                        <div class="mb-3">
-                            <label for="startTimeInput" class="form-label text-light">Waktu Mulai:</label>
-                            <input 
-                                type="datetime-local" 
-                                id="startTimeInput" 
-                                class="form-control mb-2" 
-                                value="${currentStartTime}"
-                                min="${new Date().toISOString().slice(0, 16)}"
-                            >
-                            <button 
-                                class="btn btn-success w-100 mb-3" 
-                                onclick="updateStartSchedule('${data.id}')"
-                            >
-                                <i class="bi bi-calendar-plus me-2"></i>Simpan Jadwal Mulai
-                            </button>
-                        </div>
-                        `
-                            : ""
-                        }
-
-                        <h5 class="text-primary mb-3">
-                            <i class="bi bi-clock-history me-2"></i>Atur Stop Otomatis
-                        </h5>
-                        <input 
-                            type="number" 
-                            id="durationInput" 
-                            class="form-control mb-2" 
-                            placeholder="Masukkan durasi dalam menit" 
-                            min="0"
-                            value="${data.duration || ""}"
-                        >
-                        <button 
-                            class="btn btn-warning w-100" 
-                            onclick="updateStopSchedule('${data.id}')"
-                        >
-                            <i class="bi bi-save me-2"></i>Simpan Jadwal Stop
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Stream Key -->
-                <div class="col-12">
-                    <div class="p-3 bg-dark rounded">
-                        <h5 class="text-primary mb-3">
-                            <i class="bi bi-shield-lock me-2"></i>Stream Key
-                        </h5>
-                        <div class="input-group">
-                            <input 
-                                type="text" 
-                                class="form-control bg-black text-success" 
-                                value="${data.streamKey}" 
-                                readonly
-                            >
-                            <button 
-                                class="btn btn-outline-success" 
-                                type="button"
-                                onclick="copyToClipboard('${data.streamKey}')"
-                            >
-                                <i class="bi bi-copy"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Action Buttons -->
-                <div class="col-12 mt-4">
-                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        <button 
-                            class="btn btn-danger px-4" 
-                            onclick="handleStopStream('${data.id}')"
-                        >
-                            <i class="bi bi-stop-circle me-2"></i>Stop Stream
-                        </button>
-                        <button 
-                            class="btn btn-primary px-4" 
-                            onclick="handleRestartStream('${data.id}')"
-                        >
-                            <i class="bi bi-arrow-repeat me-2"></i>Restart
-                        </button>
-                        <button 
-                            class="btn btn-warning px-4" 
-                            onclick="handleDeleteStream('${data.id}')"
-                        >
-                            <i class="bi bi-trash3 me-2"></i>Hapus
-                        </button>
-                    </div>
-                </div>
+        <!-- Status -->
+        <div class="col-md-6">
+          <div class="bg-body-tertiary rounded-3 p-3 h-100">
+            <h5 class="text-primary mb-3">
+              <i class="bi bi-activity me-2"></i>Status Stream
+            </h5>
+            <div class="row">
+              <div class="col-6">
+                <p class="mb-1 text-body-secondary">Status:</p>
+                <span id="statusBadge" class="badge badge-status ${getStatusStyle(data.status)}">
+                  ${data.status}
+                </span>
+              </div>
+              <div class="col-6">
+                <p class="mb-1 text-body-secondary">Mulai:</p>
+                <span class="fw-semibold">${formattedStartTime}</span>
+              </div>
+              ${data.uptime ? `
+              <div class="col-12 mt-3">
+                <p class="mb-1 text-body-secondary">Uptime:</p>
+                <span class="fw-semibold">${data.uptime}</span>
+              </div>` : ""}
             </div>
-        `;
+
+            <hr class="my-4" />
+
+            ${
+              showScheduleControls
+                ? `
+              <h5 class="text-primary mb-3">
+                <i class="bi bi-calendar-check me-2"></i>Atur Jadwal Mulai
+              </h5>
+              <div class="mb-3">
+                <label for="startTimeInput" class="form-label">Waktu Mulai:</label>
+                <input
+                  type="datetime-local"
+                  id="startTimeInput"
+                  class="form-control mb-2"
+                  value="${currentStartTime}"
+                  min="${toLocalInputValue(new Date())}"
+                />
+                <button
+                  class="btn btn-success w-100"
+                  onclick="updateStartSchedule('${data.id}')"
+                >
+                  <i class="bi bi-calendar-plus me-2"></i>Simpan Jadwal Mulai
+                </button>
+              </div>
+              <hr class="my-4" />`
+                : ""
+            }
+
+            <h5 class="text-primary mb-3">
+              <i class="bi bi-clock-history me-2"></i>Atur Stop Otomatis
+            </h5>
+            <label for="durationInput" class="form-label">Durasi (menit):</label>
+            <input
+              type="number"
+              id="durationInput"
+              class="form-control mb-2"
+              placeholder="cth: 120"
+              min="0"
+              max="2880"
+              value="${data.duration || ""}"
+            />
+            <div class="form-text mb-2">0 = tidak berhenti otomatis.</div>
+            <button
+              class="btn btn-warning w-100"
+              onclick="updateStopSchedule('${data.id}')"
+            >
+              <i class="bi bi-save me-2"></i>Simpan Jadwal Stop
+            </button>
+          </div>
+        </div>
+
+        <!-- Stream key -->
+        <div class="col-12">
+          <div class="bg-body-tertiary rounded-3 p-3">
+            <h5 class="text-primary mb-3">
+              <i class="bi bi-shield-lock me-2"></i>Stream Key
+            </h5>
+            <div class="input-group">
+              <input
+                type="text"
+                class="form-control font-monospace"
+                value="${data.streamKey}"
+                readonly
+              />
+              <button
+                class="btn btn-outline-success"
+                type="button"
+                onclick="copyToClipboard('${data.streamKey}')"
+                title="Salin stream key"
+              >
+                <i class="bi bi-copy"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Aksi -->
+        <div class="col-12">
+          <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+            <button
+              class="btn btn-danger px-4"
+              onclick="handleStopStream('${data.id}')"
+            >
+              <i class="bi bi-stop-circle me-2"></i>Stop Stream
+            </button>
+            <button
+              class="btn btn-primary px-4"
+              onclick="handleRestartStream('${data.id}')"
+            >
+              <i class="bi bi-arrow-repeat me-2"></i>Restart
+            </button>
+            <button
+              class="btn btn-outline-danger px-4"
+              onclick="handleDeleteStream('${data.id}')"
+            >
+              <i class="bi bi-trash3 me-2"></i>Hapus
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
 
     document.getElementById("liveContainer").innerHTML = template;
     initTooltips();
   }
 
   // =====================
-  // NEW SCHEDULE FUNCTIONS
+  // JADWAL
   // =====================
   async function updateStartSchedule(liveId) {
     const startTime = document.getElementById("startTimeInput").value;
@@ -284,6 +282,10 @@
         body: JSON.stringify({ startTime: startTime }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        showAlert(data.message || "Gagal menyimpan jadwal", "danger");
+        return;
+      }
       showAlert(data.message, "success");
       loadLiveInfo(liveId);
     } catch (error) {
@@ -308,6 +310,10 @@
         body: JSON.stringify({ duration: parseInt(duration) }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        showAlert(data.message || "Gagal menyimpan jadwal", "danger");
+        return;
+      }
       showAlert(data.message, "success");
       loadLiveInfo(liveId);
     } catch (error) {
@@ -316,8 +322,15 @@
   }
 
   // =====================
-  // UTILITY FUNCTIONS
+  // UTILITAS
   // =====================
+  function toLocalInputValue(dt) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
+      dt.getDate()
+    )}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  }
+
   function getLiveIdFromURL() {
     return window.location.pathname.split("/").pop() || null;
   }
@@ -329,7 +342,7 @@
       Scheduled: "bg-warning bg-opacity-25 text-warning",
       Pending: "bg-info bg-opacity-25 text-info",
     };
-    return statusStyles[status] || "bg-secondary";
+    return statusStyles[status] || "text-bg-secondary";
   }
 
   async function updateLiveStatus(liveId) {
@@ -337,9 +350,12 @@
       const response = await fetch(`/get_live_info/${liveId}`);
       const data = await response.json();
 
+      if (!response.ok) return;
       const statusBadge = document.getElementById("statusBadge");
       if (statusBadge) {
-        statusBadge.className = `badge ${getStatusStyle(data.status)}`;
+        statusBadge.className = `badge badge-status ${getStatusStyle(
+          data.status
+        )}`;
         statusBadge.textContent = data.status;
       }
     } catch (error) {
@@ -348,7 +364,7 @@
   }
 
   // =====================
-  // ACTION HANDLERS
+  // AKSI
   // =====================
   async function handleStopStream(liveId) {
     if (!confirm("Apakah Anda yakin ingin menghentikan stream ini?")) return;
@@ -359,8 +375,6 @@
       });
       const data = await response.json();
       showAlert(`Status: ${data.message}`, "danger");
-
-      // Reload info to update UI
       setTimeout(() => loadLiveInfo(liveId), 1000);
     } catch (error) {
       showAlert(`Error: ${error.message}`, "danger");
@@ -374,8 +388,6 @@
       });
       const data = await response.json();
       showAlert(`Status: ${data.message}`, "success");
-
-      // Reload info to update UI
       setTimeout(() => loadLiveInfo(liveId), 1000);
     } catch (error) {
       showAlert(`Error: ${error.message}`, "danger");
@@ -398,7 +410,7 @@
   }
 
   // =====================
-  // UI HELPERS
+  // BANTUAN UI
   // =====================
   function copyToClipboard(text) {
     navigator.clipboard
@@ -409,18 +421,15 @@
 
   function showAlert(message, type) {
     const alertBox = document.createElement("div");
-    alertBox.className = `alert alert-${type} alert-dismissible fade show alert-bright`;
+    alertBox.className = `alert alert-${type} alert-dismissible fade show`;
     alertBox.innerHTML = `
-            <i class="bi ${getAlertIcon(type)} me-2"></i>
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        `;
-
+      <i class="bi ${getAlertIcon(type)} me-2"></i>
+      ${message}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
     document.getElementById("response").appendChild(alertBox);
-
     setTimeout(() => {
       alertBox.classList.remove("show");
-      alertBox.classList.add("fade");
       setTimeout(() => alertBox.remove(), 500);
     }, 5000);
   }
@@ -437,22 +446,22 @@
 
   function showNotFoundMessage() {
     document.getElementById("liveContainer").innerHTML = `
-            <div class="text-center py-5">
-                <i class="bi bi-broadcast-slash display-1 text-danger"></i>
-                <h3 class="mt-3 text-muted">Stream tidak ditemukan</h3>
-                <p class="text-secondary">Silakan pilih stream yang valid dari daftar</p>
-                <a href="/live_list" class="btn btn-primary mt-3">
-                    <i class="bi bi-list me-2"></i>Lihat Daftar Stream
-                </a>
-            </div>`;
+      <div class="text-center py-5">
+        <i class="bi bi-broadcast-slash display-1 text-danger"></i>
+        <h3 class="mt-3 text-body-secondary">Stream tidak ditemukan</h3>
+        <p class="text-body-secondary">Silakan pilih stream yang valid dari daftar</p>
+        <a href="/live_list" class="btn btn-primary mt-3">
+          <i class="bi bi-list me-2"></i>Lihat Daftar Stream
+        </a>
+      </div>`;
   }
 
   function showErrorMessage(message) {
     document.getElementById("liveContainer").innerHTML = `
-            <div class="alert alert-danger mx-3">
-                <i class="bi bi-x-octagon me-2"></i>
-                ${message}
-            </div>`;
+      <div class="alert alert-danger mx-3">
+        <i class="bi bi-x-octagon me-2"></i>
+        ${message}
+      </div>`;
   }
 
   function initTooltips() {
@@ -464,55 +473,4 @@
     });
   }
 </script>
-
-<style>
-  .card {
-    border-radius: 15px;
-    transition: transform 0.2s;
-  }
-
-  .card:hover {
-    transform: translateY(-2px);
-  }
-
-  .bg-dark {
-    background-color: #1a1a1a !important;
-  }
-
-  .bg-secondary {
-    background-color: #2d2d2d !important;
-  }
-
-  .text-light {
-    color: #e8e8e8 !important;
-  }
-
-  .btn-outline-success {
-    border-color: #28a745 !important;
-    color: #28a745 !important;
-  }
-
-  .btn-outline-success:hover {
-    background-color: #28a745 !important;
-    color: white !important;
-  }
-
-  .alert-bright {
-    background-color: #ffffff !important;
-    color: #000000 !important;
-    border-color: #000000 !important;
-  }
-
-  #durationInput,
-  #startTimeInput {
-    background-color: #333;
-    border-color: #555;
-    color: white;
-  }
-
-  #durationInput::placeholder,
-  #startTimeInput::placeholder {
-    color: #888 !important;
-  }
-</style>
 {% endblock %}

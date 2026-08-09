@@ -1,158 +1,164 @@
-{% extends "layout.html" %} {% block content %}
-<div class="container">
-  <!-- Header Section -->
-  <div
-    class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4"
-  >
-    <h1 class="text-primary mb-3 mb-md-0 fs-4 fs-md-3">
-      <i class="bi bi-cloud-arrow-up-fill me-2"></i>Manajemen Video
-    </h1>
-    <div class="d-flex gap-2">
-      <button
-        class="btn btn-outline-secondary refresh-btn"
-        onclick="refreshPage()"
-      >
-        <i class="bi bi-arrow-clockwise"></i> Refresh
-      </button>
+{% extends "layout.html" %}
+{% block content %}
+<div
+  class="page-title d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4 gap-3"
+>
+  <div class="d-flex align-items-center gap-3">
+    <span class="page-icon"><i class="bi bi-cloud-arrow-up"></i></span>
+    <div>
+      <h1 class="h3 mb-0 fw-bold">Manajemen Video</h1>
+      <p class="text-body-secondary mb-0">
+        Download dari Google Drive dan kelola koleksi video kamu.
+      </p>
     </div>
   </div>
+  <button class="btn btn-outline-secondary" onclick="refreshPage()">
+    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+  </button>
+</div>
 
-  <!-- Upload Card -->
-  <div class="card bg-dark border-secondary mb-4 shadow-lg">
-    <div class="card-header bg-secondary bg-opacity-25 py-2">
-      <h4 class="text-light mb-0 fs-5">
-        <i class="bi bi-google-drive me-2"></i>Download dari Google Drive
-      </h4>
-    </div>
-    <div class="card-body">
-      <form id="uploadForm" class="needs-validation" novalidate>
-        <div class="mb-3">
-          <label class="form-label text-light">URL Google Drive</label>
-          <div class="input-group">
-            <input
-              type="url"
-              name="file_url"
-              class="form-control bg-black border-dark text-light"
-              placeholder="https://drive.google.com/..."
-              required
-            />
-            <button type="submit" class="btn btn-primary px-3 px-md-4">
-              <i class="bi bi-lightning-charge d-none d-md-inline"></i>
-              <span class="d-md-none">Download</span>
-            </button>
-          </div>
-          <div class="invalid-feedback">
-            Harap masukkan URL Google Drive yang valid
-          </div>
+<!-- Upload -->
+<div class="card card-hover border-0 shadow-sm mb-4">
+  <div class="card-header bg-body-tertiary">
+    <h4 class="h5 mb-0">
+      <i class="bi bi-google-drive me-2"></i>Download dari Google Drive
+    </h4>
+  </div>
+  <div class="card-body">
+    <form id="uploadForm" class="needs-validation" novalidate>
+      <div class="mb-3">
+        <label for="fileUrl" class="form-label">URL Google Drive</label>
+        <div class="input-group">
+          <input
+            type="url"
+            name="file_url"
+            id="fileUrl"
+            class="form-control"
+            placeholder="https://drive.google.com/..."
+            required
+          />
+          <button type="submit" class="btn btn-primary px-4">
+            <i class="bi bi-download me-1"></i>Download
+          </button>
         </div>
-      </form>
+        <div class="invalid-feedback">
+          Harap masukkan URL Google Drive yang valid
+        </div>
+        <div class="form-text">
+          Pastikan file di Google Drive di-share sebagai
+          <strong>"Anyone with the link"</strong> sebelum diunduh.
+        </div>
+      </div>
+    </form>
 
-      <!-- Progress Bar -->
-      <div class="mt-4">
+    <div class="mt-4">
+      <div class="progress thick" style="height: 25px">
         <div
-          class="progress bg-black"
-          style="height: 25px; border-radius: 12px"
+          id="progressBar"
+          class="progress-bar progress-bar-striped bg-success"
+          role="progressbar"
+          style="width: 0%"
         >
-          <div
-            id="progressBar"
-            class="progress-bar progress-bar-striped bg-success"
-            role="progressbar"
-            style="width: 0%"
-          >
-            <span class="progress-text">0%</span>
-          </div>
+          <span class="progress-text">0%</span>
         </div>
-        <small class="text-secondary mt-2 d-block" id="uploadStatus">
-          Status: Menunggu download...
-        </small>
       </div>
-    </div>
-  </div>
-
-  <!-- Video List -->
-  <div class="card bg-dark border-secondary shadow-lg">
-    <div class="card-header bg-secondary bg-opacity-25 py-2">
-      <h4 class="text-light mb-0 fs-5">
-        <i class="bi bi-collection-play me-2"></i>Daftar Video
-      </h4>
-    </div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-dark table-hover align-middle mb-0">
-          <thead class="bg-black">
-            <tr>
-              <th class="text-primary">Nama Video</th>
-              <th class="text-primary">Ukuran</th>
-              <th class="text-primary">Tanggal Upload</th>
-              <th class="text-primary text-end">Aksi</th>
-            </tr>
-          </thead>
-          <tbody id="videoListBody">
-            {% for video in videos %}
-            <tr>
-              <td class="text-truncate" style="max-width: 150px">
-                <i class="bi bi-file-earmark-play me-2"></i>
-                {{ video.original_name }}
-              </td>
-              <td>{{ video.size }}</td>
-              <td>{{ video.upload_date }}</td>
-              <td class="text-end">
-                <div class="btn-group btn-group-sm">
-                  <button
-                    class="btn btn-outline-info"
-                    onclick="reviewVideo('{{ video.filename }}')"
-                  >
-                    <i class="bi bi-eye"></i>
-                  </button>
-                  <button
-                    class="btn btn-outline-warning"
-                    onclick="renameVideo('{{ video.filename }}')"
-                  >
-                    <i class="bi bi-pencil-square"></i>
-                  </button>
-                  <button
-                    class="btn btn-outline-danger"
-                    onclick="deleteVideo('{{ video.filename }}')"
-                  >
-                    <i class="bi bi-trash3"></i>
-                  </button>
-                </div>
-              </td>
-            </tr>
-            {% else %}
-            <tr>
-              <td colspan="4" class="text-center text-secondary py-4">
-                <i class="bi bi-inbox me-2"></i>Tidak ada video
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+      <small class="text-body-secondary mt-2 d-block" id="uploadStatus">
+        Status: Menunggu download...
+      </small>
     </div>
   </div>
 </div>
 
-<!-- Review Modal -->
-<div class="modal fade" id="reviewModal" tabindex="-1">
+<!-- Daftar video -->
+<div class="card border-0 shadow-sm">
+  <div class="card-header bg-body-tertiary">
+    <h4 class="h5 mb-0">
+      <i class="bi bi-collection-play me-2"></i>Daftar Video
+    </h4>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Nama Video</th>
+            <th>Ukuran</th>
+            <th>Tanggal Upload</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody id="videoListBody">
+          {% for video in videos %}
+          <tr>
+            <td class="text-truncate">
+              <i class="bi bi-file-earmark-play me-2 text-primary"></i>
+              {{ video.original_name }}
+            </td>
+            <td>{{ video.size }}</td>
+            <td>{{ video.upload_date }}</td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                <button
+                  class="btn btn-outline-info"
+                  data-action="review"
+                  data-filename="{{ video.filename }}"
+                  title="Preview"
+                >
+                  <i class="bi bi-eye"></i>
+                </button>
+                <button
+                  class="btn btn-outline-warning"
+                  data-action="rename"
+                  data-filename="{{ video.filename }}"
+                  title="Ganti nama"
+                >
+                  <i class="bi bi-pencil-square"></i>
+                </button>
+                <button
+                  class="btn btn-outline-danger"
+                  data-action="delete"
+                  data-filename="{{ video.filename }}"
+                  title="Hapus"
+                >
+                  <i class="bi bi-trash3"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="4" class="text-center text-body-secondary py-4">
+              <i class="bi bi-inbox me-2"></i>Tidak ada video
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal preview -->
+<div class="modal fade" id="reviewModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-xl modal-dialog-centered">
-    <div class="modal-content bg-dark text-light">
-      <div class="modal-header border-secondary">
-        <h5 class="modal-title fs-6 fs-md-5">
-          <i class="bi bi-play-circle me-2"></i>Preview Video
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">
+          <i class="bi bi-play-circle me-2 text-primary"></i>Preview Video
         </h5>
         <button
           type="button"
-          class="btn-close btn-close-white"
+          class="btn-close"
           data-bs-dismiss="modal"
+          aria-label="Tutup"
         ></button>
       </div>
       <div class="modal-body text-center p-1 p-md-3">
         <video
           id="reviewVideo"
-          class="w-100 rounded shadow"
+          class="w-100 shadow"
           controls
-          style="max-height: 50vh"
+          style="max-height: 55vh"
         >
           <source id="reviewVideoSource" type="video/mp4" />
           Browser tidak mendukung pemutaran video
@@ -162,17 +168,54 @@
   </div>
 </div>
 
+<!-- Modal error (harus ditutup user, tidak hilang sendiri) -->
+<div class="modal fade" id="errorModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0 d-flex align-items-start gap-2">
+        <span class="brand-chip" style="width: 44px; height: 44px; font-size: 1.2rem">
+          <i class="bi bi-exclamation-triangle"></i>
+        </span>
+        <button
+          type="button"
+          class="btn-close ms-auto"
+          data-bs-dismiss="modal"
+          aria-label="Tutup"
+        ></button>
+      </div>
+      <div class="modal-body pt-2">
+        <h5 class="modal-title mb-2 fw-bold">Terjadi Kesalahan</h5>
+        <p id="errorModalMessage" class="text-body-secondary mb-0"></p>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">
+          <i class="bi bi-check-lg me-1"></i>Tutup
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
   // =====================
-  // INITIALIZATION
+  // INISIALISASI
   // =====================
   document.addEventListener("DOMContentLoaded", () => {
     initializeFormValidation();
     loadUploadedVideos();
+    // Delegasi klik untuk tombol aksi tabel (aman terhadap nama file aneh)
+    document.getElementById("videoListBody").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+      const { action, filename } = btn.dataset;
+      if (action === "review") reviewVideo(filename);
+      else if (action === "rename") renameVideo(filename);
+      else if (action === "delete") deleteVideo(filename);
+    });
   });
 
   // =====================
-  // FORM HANDLING
+  // FORM
   // =====================
   function initializeFormValidation() {
     const form = document.getElementById("uploadForm");
@@ -194,7 +237,7 @@
   }
 
   // =====================
-  // UPLOAD SYSTEM
+  // DOWNLOAD
   // =====================
   function startUpload(data) {
     const xhr = new XMLHttpRequest();
@@ -202,21 +245,20 @@
     const progressText = progressBar.querySelector(".progress-text");
     const uploadStatus = document.getElementById("uploadStatus");
 
-    xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable) {
-        const percent = Math.round((e.loaded / e.total) * 100);
-        progressBar.style.width = `${percent}%`;
-        progressText.textContent = `${percent}%`;
-        uploadStatus.textContent = `Mengunggah: ${percent}% selesai`;
-      }
-    });
+    // Download berlangsung di sisi server; tampilkan status indeterminate
+    progressBar.style.width = "100%";
+    progressBar.classList.add("progress-bar-animated");
+    progressText.textContent = "...";
+    uploadStatus.textContent = "Mengunduh dari Google Drive...";
 
     xhr.addEventListener("load", () => {
       handleUploadResponse(xhr);
     });
 
     xhr.addEventListener("error", () => {
-      showAlert("Terjadi kesalahan saat mengunggah", "danger");
+      showErrorModal(
+        "Terjadi kesalahan jaringan saat mengunduh. Periksa koneksi, lalu coba lagi."
+      );
       resetProgressBar();
     });
 
@@ -233,16 +275,24 @@
     if (xhr.status === 200) {
       const response = JSON.parse(xhr.responseText);
       if (response.success) {
-        progressBar.classList.remove("bg-success");
+        progressBar.classList.remove("bg-success", "progress-bar-animated");
         progressBar.classList.add("bg-primary");
         uploadStatus.textContent = "Upload berhasil!";
         showAlert(response.message, "success");
         loadUploadedVideos();
       } else {
-        showAlert(response.message, "danger");
+        showErrorModal(response.message);
       }
     } else {
-      showAlert(`Error: ${xhr.statusText}`, "danger");
+      // Server mengirim pesan JSON yang jelas; pakai itu kalau ada
+      let message = `Error: ${xhr.statusText}`;
+      try {
+        const response = JSON.parse(xhr.responseText);
+        if (response && response.message) message = response.message;
+      } catch (e) {
+        // responseText bukan JSON; pakai statusText
+      }
+      showErrorModal(message);
     }
 
     setTimeout(resetProgressBar, 2000);
@@ -251,15 +301,15 @@
   function resetProgressBar() {
     const progressBar = document.getElementById("progressBar");
     progressBar.style.width = "0%";
-    progressBar.classList.remove("bg-primary");
+    progressBar.classList.remove("bg-primary", "progress-bar-animated");
     progressBar.classList.add("bg-success");
     progressBar.querySelector(".progress-text").textContent = "0%";
     document.getElementById("uploadStatus").textContent =
-      "Status: Menunggu upload...";
+      "Status: Menunggu download...";
   }
 
   // =====================
-  // VIDEO MANAGEMENT
+  // DAFTAR VIDEO
   // =====================
   async function loadUploadedVideos() {
     try {
@@ -267,50 +317,86 @@
       const videos = await response.json();
       renderVideoList(videos);
     } catch (error) {
-      showAlert("Gagal memuat daftar video", "danger");
+      showErrorModal("Gagal memuat daftar video. Pastikan server berjalan.");
     }
+  }
+
+  function makeActionButton(action, styleClass, iconClass, filename) {
+    const btn = document.createElement("button");
+    btn.className = `btn btn-outline-${styleClass}`;
+    btn.dataset.action = action;
+    btn.dataset.filename = filename;
+    btn.title =
+      action === "review"
+        ? "Preview"
+        : action === "rename"
+        ? "Ganti nama"
+        : "Hapus";
+    const icon = document.createElement("i");
+    icon.className = `bi ${iconClass}`;
+    btn.appendChild(icon);
+    return btn;
   }
 
   function renderVideoList(videos) {
     const tbody = document.getElementById("videoListBody");
-    tbody.innerHTML =
-      videos
-        .map(
-          (video) => `
-            <tr>
-                <td class="text-truncate" style="max-width: 250px">
-                    <i class="bi bi-file-earmark-play me-2"></i>
-                    ${video.original_name}
-                </td>
-                <td>${video.size}</td>
-                <td>${video.upload_date}</td>
-                <td class="text-end">
-                    <div class="btn-group btn-group-sm">
-                        <button class="btn btn-outline-info" onclick="reviewVideo('${video.filename}')">
-                            <i class="bi bi-eye"></i>
-                        </button>
-                        <button class="btn btn-outline-warning" onclick="renameVideo('${video.filename}')">
-                            <i class="bi bi-pencil-square"></i>
-                        </button>
-                        <button class="btn btn-outline-danger" onclick="deleteVideo('${video.filename}')">
-                            <i class="bi bi-trash3"></i>
-                        </button>
-                    </div>
-                </td>
-            </tr>
-        `
-        )
-        .join("") ||
-      `
-            <tr>
-                <td colspan="4" class="text-center text-secondary py-4">
-                    <i class="bi bi-inbox me-2"></i>Tidak ada video
-                </td>
-            </tr>`;
+    tbody.innerHTML = "";
+
+    if (!videos || videos.length === 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 4;
+      td.className = "text-center text-body-secondary py-4";
+      const icon = document.createElement("i");
+      icon.className = "bi bi-inbox me-2";
+      td.appendChild(icon);
+      td.appendChild(document.createTextNode("Tidak ada video"));
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
+    videos.forEach((video) => {
+      const tr = document.createElement("tr");
+
+      const tdName = document.createElement("td");
+      tdName.className = "text-truncate";
+      const icon = document.createElement("i");
+      icon.className = "bi bi-file-earmark-play me-2 text-primary";
+      tdName.appendChild(icon);
+      tdName.appendChild(document.createTextNode(video.original_name || ""));
+
+      const tdSize = document.createElement("td");
+      tdSize.textContent = video.size || "";
+
+      const tdDate = document.createElement("td");
+      tdDate.textContent = video.upload_date || "";
+
+      const tdActions = document.createElement("td");
+      tdActions.className = "text-end";
+      const group = document.createElement("div");
+      group.className = "btn-group btn-group-sm";
+      group.appendChild(
+        makeActionButton("review", "info", "bi-eye", video.filename)
+      );
+      group.appendChild(
+        makeActionButton("rename", "warning", "bi-pencil-square", video.filename)
+      );
+      group.appendChild(
+        makeActionButton("delete", "danger", "bi-trash3", video.filename)
+      );
+      tdActions.appendChild(group);
+
+      tr.appendChild(tdName);
+      tr.appendChild(tdSize);
+      tr.appendChild(tdDate);
+      tr.appendChild(tdActions);
+      tbody.appendChild(tr);
+    });
   }
 
   // =====================
-  // VIDEO ACTIONS
+  // AKSI VIDEO
   // =====================
   function reviewVideo(filename) {
     const videoPlayer = document.getElementById("reviewVideo");
@@ -341,7 +427,7 @@
           throw new Error(result.message);
         }
       } catch (error) {
-        showAlert(error.message, "danger");
+        showErrorModal(error.message);
       }
     }
   }
@@ -363,25 +449,39 @@
           throw new Error(result.message);
         }
       } catch (error) {
-        showAlert(error.message, "danger");
+        showErrorModal(error.message);
       }
     }
   }
 
   // =====================
-  // UTILITIES
+  // UTILITAS
   // =====================
   function showAlert(message, type) {
     const alert = document.createElement("div");
     alert.className = `alert alert-${type} alert-dismissible fade show`;
     alert.innerHTML = `
-            <i class="bi ${getAlertIcon(type)} me-2"></i>
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        `;
+      <i class="bi ${getAlertIcon(type)} me-2"></i>
+      ${message}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
 
     document.body.appendChild(alert);
+    alert.style.position = "fixed";
+    alert.style.top = "72px";
+    alert.style.right = "16px";
+    alert.style.zIndex = "2000";
+    alert.style.maxWidth = "420px";
+    alert.style.boxShadow = "0 6px 18px rgba(0,0,0,.15)";
     setTimeout(() => alert.remove(), 5000);
+  }
+
+  function showErrorModal(message) {
+    document.getElementById("errorModalMessage").textContent = message;
+    const modal = bootstrap.Modal.getOrCreateInstance(
+      document.getElementById("errorModal")
+    );
+    modal.show();
   }
 
   function getAlertIcon(type) {
@@ -398,107 +498,4 @@
     window.location.reload();
   }
 </script>
-
-<style>
-  /* Responsive Adjustments */
-  @media (max-width: 768px) {
-    .container {
-      padding-left: 0.5rem;
-      padding-right: 0.5rem;
-    }
-
-    .card-header h4 {
-      font-size: 1rem !important;
-    }
-
-    .table td,
-    .table th {
-      padding: 0.75rem 0.5rem;
-    }
-
-    .btn-group-sm > .btn {
-      padding: 0.25rem 0.5rem;
-    }
-
-    video {
-      max-height: 40vh !important;
-    }
-  }
-
-  @media (max-width: 576px) {
-    .progress-text {
-      font-size: 0.75rem;
-    }
-
-    #uploadStatus {
-      font-size: 0.8rem;
-    }
-
-    .modal-body {
-      padding: 0.5rem;
-    }
-
-    .btn-outline-info,
-    .btn-outline-warning,
-    .btn-outline-danger {
-      padding: 0.2rem 0.4rem;
-    }
-  }
-
-  /* Placeholder Color */
-  ::placeholder {
-    color: #aaa; /* Change this color to your desired color */
-    opacity: 1; /* Fully opaque */
-  }
-
-  :-ms-input-placeholder {
-    /* Internet Explorer 10-11 */
-    color: #aaa;
-  }
-
-  ::-ms-input-placeholder {
-    /* Microsoft Edge */
-    color: #aaa;
-  }
-
-  /* Specific Placeholder Color for Google Drive URL */
-  input::placeholder {
-    color: #aaa; /* Lighter color for better visibility */
-  }
-  input[placeholder="https://drive.google.com/..."]::placeholder
-  {
-    color: #5b5b5b; /* Change this color to your desired color */
-  }
-
-  /* Styling for Refresh Button */
-  .refresh-btn {
-    padding: 10px 20px; /* Padding lebih besar untuk desktop */
-    min-width: 120px; /* Lebar minimum agar lebih besar */
-    height: 45px; /* Tinggi minimum */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1rem; /* Ukuran teks default */
-    white-space: nowrap; /* Pastikan teks tidak patah baris */
-  }
-
-  /* Media Query untuk Mobile */
-  @media (max-width: 768px) {
-    .refresh-btn {
-      padding: 12px 24px; /* Padding lebih besar untuk sentuhan */
-      min-width: 130px; /* Lebar lebih besar */
-      height: 50px; /* Tinggi lebih besar */
-      font-size: 1.1rem; /* Ukuran teks lebih besar */
-    }
-  }
-
-  @media (max-width: 576px) {
-    .refresh-btn {
-      padding: 14px 28px; /* Padding lebih besar lagi */
-      min-width: 140px; /* Lebar lebih besar */
-      height: 55px; /* Tinggi lebih besar */
-      font-size: 1.2rem; /* Ukuran teks lebih besar */
-    }
-  }
-</style>
 {% endblock %}
