@@ -39,8 +39,9 @@ info "Memperbarui sistem..."
 $SUDO apt update -y
 $SUDO apt upgrade -y || warn "apt upgrade gagal, melanjutkan instalasi..."
 
-info "Menginstal Git, FFmpeg, cpulimit, python3..."
-$SUDO apt install -y git ffmpeg cpulimit python3-pip python3-venv
+info "Menginstal Git, FFmpeg, python3..."
+# catatan: cpulimit tidak lagi dipakai aplikasi (membuat ingest RTMP putus)
+$SUDO apt install -y git ffmpeg python3-pip python3-venv
 ok "Dependensi sistem terpasang."
 
 # ============================================================

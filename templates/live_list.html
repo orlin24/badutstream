@@ -328,6 +328,14 @@
       small.className = "text-body-secondary";
       small.textContent = info.startTime || "";
 
+      if (info.last_error) {
+        const errLine = document.createElement("div");
+        errLine.className = "small text-danger text-truncate";
+        errLine.title = info.last_error;
+        errLine.textContent = info.last_error;
+        textDiv.appendChild(errLine);
+      }
+
       const icon = document.createElement("i");
       icon.className = "bi bi-chevron-right text-body-secondary";
 

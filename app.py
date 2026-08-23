@@ -29,7 +29,7 @@ CORS(app)  # Enable CORS for all routes
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Gunakan lock untuk menghindari race condition saat menghapus proses dari dictionary
-process_lock = threading.Lock()
+process_lock = threading.RLock()  # RLock: restart_if_needed memanggil fungsi yang mengunci ulang di thread yang sama
 
 # Konfigurasi path
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -134,6 +134,39 @@ def load_data():
 # Panggil load_data saat startup
 load_data()
 
+def _read_log_tail(path, max_bytes=4096):
+    """Baca N byte terakhir file log (untuk menampilkan penyebab stream mati)."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            return f.read().decode('utf-8', errors='replace')
+    except OSError:
+        return ''
+
+
+def record_stream_failure(live_id, process=None):
+    """Simpan penyebab terakhir stream mati (exit code + log ffmpeg) ke live_info
+    agar bisa dilihat user di UI, bukan sekadar status berubah menjadi Stopped."""
+    info = live_info.get(live_id)
+    if not info:
+        return
+    tail = _read_log_tail(os.path.join(uploads_dir, f'ffmpeg_{live_id}.log'))
+    lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+    parts = []
+    code = process.poll() if process is not None else None
+    if code is not None and code != 0:
+        parts.append(f"ffmpeg keluar dengan exit code {code}")
+    elif process is not None:
+        parts.append("ffmpeg keluar")
+    if lines:
+        parts.append("Log terakhir: " + " | ".join(lines[-5:]))
+    if parts:
+        info['last_error'] = ". ".join(parts)[:2000]
+        save_live_info()
+
+
 def _restart_stream_with_limit(live_id, info):
     """Restart stream dengan batas percobaan untuk mencegah loop tak terbatas."""
     attempts = record_restart_attempt(live_id)
@@ -143,28 +176,55 @@ def _restart_stream_with_limit(live_id, info):
             f"status diubah menjadi Stopped."
         )
         if live_id in live_info:
+            prev_error = live_info[live_id].get('last_error') or ''
+            give_up_msg = (
+                f"Dihentikan otomatis setelah gagal restart {attempts}x "
+                f"dalam {RESTART_WINDOW_SECONDS}s"
+            )
             live_info[live_id]['status'] = 'Stopped'
+            live_info[live_id]['last_error'] = (
+                (prev_error + ' | ' + give_up_msg) if prev_error else give_up_msg
+            )
             save_live_info()
         return
-    threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, dict(info)]).start()
+    # Jadwalkan restart dengan jeda; tandai pending supaya watchdog tidak
+    # memasang timer ganda selama jeda berlangsung.
+    with process_lock:
+        pending_restarts.add(live_id)
+    threading.Timer(RESTART_DELAY_SECONDS, _delayed_restart, args=[live_id]).start()
+
+
+def _delayed_restart(live_id):
+    with process_lock:
+        pending_restarts.discard(live_id)
+    info = live_info.get(live_id)
+    # Batal jika stream sudah di-stop user saat menunggu jeda restart
+    if not info or info.get('status') != 'Active':
+        logging.info(f"Restart stream {live_id} dibatalkan (status bukan Active).")
+        return
+    logging.info(f"Menjalankan ulang stream {live_id}...")
+    threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, dict(info)], daemon=True).start()
 
 
 def restart_if_needed():
     while True:
         with process_lock:
             live_ids = list(processes.keys())
-            for live_id in live_ids:
+            for live_id in list(live_info.keys()):
                 info = live_info.get(live_id)
                 if not info or info.get('status') != 'Active':
                     continue
+                if live_id in pending_restarts:
+                    continue
                 process = processes.get(live_id)
                 if process and process.poll() is not None:  # Proses sudah mati
-                    logging.debug(f"Stream {live_id} mati, melakukan restart...")
                     del processes[live_id]
+                    record_stream_failure(live_id, process)
+                    logging.warning(f"Stream {live_id} mati tidak wajar, dijadwalkan restart...")
                     _restart_stream_with_limit(live_id, info)
                 elif live_id not in processes:
                     # Proses hilang dari dictionary (mis. crash), restart otomatis
-                    logging.debug(f"Tidak ada proses untuk live_id: {live_id}, restart otomatis.")
+                    logging.warning(f"Tidak ada proses untuk live_id: {live_id}, restart dijadwalkan.")
                     _restart_stream_with_limit(live_id, info)
         # Cek setiap 10 detik untuk memastikan restart cepat
         time.sleep(10)
@@ -176,6 +236,7 @@ def save_live_info():
 uploaded_videos = load_uploaded_videos()
 live_info = load_live_info()
 processes = {}
+pending_restarts = set()  # live_id yang sudah dijadwalkan restart (anti duplikat)
 start_timers = {}
 stop_timers = {}
 data_lock = threading.Lock()
@@ -183,6 +244,7 @@ data_lock = threading.Lock()
 # Konstanta restart otomatis
 RESTART_MAX_ATTEMPTS = 3
 RESTART_WINDOW_SECONDS = 600
+RESTART_DELAY_SECONDS = 15  # jeda antar restart agar tidak storm & tidak membakar jatah percobaan
 
 
 def cancel_start_timer(live_id):
@@ -292,6 +354,52 @@ def sanitize_filename(name):
     return os.path.basename(str(name).replace('\\', '/')).strip()
 
 
+def probe_video_compatibility(file_path):
+    """Cek codec via ffprobe sebelum streaming.
+
+    Stream dikirim dengan `-c copy` ke kontainer FLV/RTMP, jadi hanya
+    H.264 (video) + AAC/MP3 (audio) yang valid; codec lain (HEVC, AV1,
+    VP9, Opus) membuat ffmpeg langsung mati setiap kali start.
+    Return (ok, pesan_error).
+    """
+    if not os.path.isfile(FFMPEG_PATH):
+        return False, (
+            f"FFmpeg tidak ditemukan di {FFMPEG_PATH}. "
+            "Instal dulu: sudo apt install ffmpeg"
+        )
+    ffprobe_path = os.path.join(os.path.dirname(FFMPEG_PATH), 'ffprobe')
+    if not os.path.isfile(ffprobe_path):
+        return True, None  # ffprobe tidak ada: lewati validasi
+    try:
+        result = subprocess.run(
+            [ffprobe_path, "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name", "-of", "json", file_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=30
+        )
+        streams = json.loads(result.stdout or "{}").get("streams", [])
+    except Exception as e:
+        logging.warning(f"Gagal memeriksa codec {file_path}: {e}")
+        return True, None
+    vcodec = next((s.get("codec_name") for s in streams if s.get("codec_type") == "video"), None)
+    acodec = next((s.get("codec_name") for s in streams if s.get("codec_type") == "audio"), None)
+    ok_video = vcodec in ("h264", None)
+    ok_audio = acodec in ("aac", "mp3", None)
+    if ok_video and ok_audio:
+        return True, None
+    detail = []
+    if not ok_video:
+        detail.append(f"video codec '{vcodec}'")
+    if not ok_audio:
+        detail.append(f"audio codec '{acodec}'")
+    return False, (
+        "Video memakai " + " dan ".join(detail) +
+        " yang tidak didukung RTMP/FLV (YouTube butuh H.264 + AAC/MP3). "
+        "Re-encode dulu contoh: ffmpeg -i input.mp4 -c:v libx264 -preset veryfast "
+        "-crf 23 -c:a aac output.mp4"
+    )
+
+
 def record_restart_attempt(live_id):
     """Catat percobaan restart dan kembalikan jumlah percobaan dalam window."""
     info = live_info.get(live_id)
@@ -365,21 +473,13 @@ def run_ffmpeg_with_nice(live_id, info):
         bufsize = f"{bitrate_value * 2}k"
         maxrate = bitrate
         
-        # Batas CPU adaptif: makin banyak stream aktif, makin kecil limit per stream
-        with process_lock:
-            active_count = sum(
-                1 for p in processes.values() if p.poll() is None
-            ) + 1  # +1 untuk stream yang sedang dimulai
-
-        # Gunakan nice untuk mengurangi prioritas proses di Linux
-        if platform.system() == 'Linux':
-            if cpulimit_available:
-                cpu_limit = max(100, 300 // max(1, active_count))
-                base_command = ["cpulimit", "-l", str(cpu_limit), FFMPEG_PATH]
-            else:
-                # Gunakan nice jika cpulimit tidak tersedia
-                base_command = ["nice", "-n", "10", FFMPEG_PATH]
-        elif platform.system() == 'Darwin':  # macOS
+        # Batas CPU adaptif dihapus: nice saja sudah cukup untuk `-c copy`.
+        # CATATAN PENTING: cpulimit TIDAK dipakai lagi. cpulimit men-throttle
+        # proses dengan SIGSTOP/SIGCONT yang membekukan aliran data RTMP;
+        # ingest YouTube memutus koneksi ketika data berhenti mengalir, lalu
+        # ffmpeg mati dan restart berulang (penyebab utama stream sering stop
+        # di VPS Linux).
+        if platform.system() in ('Linux', 'Darwin'):
             base_command = ["nice", "-n", "10", FFMPEG_PATH]
         else:
             base_command = [FFMPEG_PATH]
@@ -453,10 +553,13 @@ def run_ffmpeg_with_nice(live_id, info):
         
     except Exception as e:
         logging.error(f"FFmpeg error in run_ffmpeg_with_nice: {str(e)}")
-        if not process_started and live_id in live_info and live_info[live_id].get('status') == 'Active':
-            # Gagal sebelum proses jalan: jangan biarkan status menggantung di 'Active'
-            live_info[live_id]['status'] = 'Stopped'
-            save_live_info()
+        if live_id in live_info:
+            if not process_started and live_info[live_id].get('status') == 'Active':
+                # Gagal sebelum proses jalan: jangan biarkan status menggantung di 'Active'
+                live_info[live_id]['status'] = 'Stopped'
+            if not process_started:
+                live_info[live_id]['last_error'] = f"Gagal memulai ffmpeg: {str(e)}"[:500]
+                save_live_info()
     finally:
         if log_file:
             log_file.close()
@@ -478,6 +581,7 @@ def run_ffmpeg(live_id, info):
             live_info[live_id]['status'] = 'Active'
             live_info[live_id]['restart_count'] = 0
             live_info[live_id]['restart_timestamps'] = []
+            live_info[live_id]['last_error'] = ''
             save_live_info()
 
         # Gunakan fungsi run_ffmpeg_with_nice untuk menjalankan FFmpeg
@@ -498,6 +602,7 @@ def stop_stream_manually(live_id, is_scheduled=False, force=False):
         # restart yang sedang lahir menyalakan ulang stream ini (race condition).
         if live_id in live_info:
             live_info[live_id]['status'] = 'Stopped'
+            live_info[live_id].pop('last_error', None)  # stop manual: bersihkan error lama
             save_live_info()
 
     if process and process.poll() is None:
@@ -640,8 +745,11 @@ def monitor_resource_usage():
             if cpu_percent > 90 or memory_percent > 90:
                 logging.warning(f"Penggunaan resource tinggi - CPU: {cpu_percent}%, Memory: {memory_percent}%")
                 
-                # Jika memory sangat tinggi, hentikan stream yang paling tidak penting
-                if memory_percent > 95:
+                # Hentikan stream hanya jika memori BENAR-BENAR habis (ukuran
+                # absolut, bukan persen): di VPS RAM kecil, persen > 95 sering
+                # false positive sehingga stream dimatikan tanpa alasan jelas.
+                mem_available_mb = memory.available / (1024 * 1024)
+                if mem_available_mb < 300:
                     # Cari stream dengan prioritas terendah
                     active_streams = [(id, info) for id, info in live_info.items() 
                                      if info['status'] == 'Active']
@@ -655,7 +763,8 @@ def monitor_resource_usage():
                             low_priority_id = sorted_streams[0][0]
                             stop_stream_manually(low_priority_id, force=True)
                             logging.warning(
-                                f"Memory hampir penuh ({memory_percent}%). Stream '{live_info[low_priority_id]['title']}' dihentikan otomatis."
+                                f"Memory tersisa {mem_available_mb:.0f} MB (<300 MB). "
+                                f"Stream '{live_info[low_priority_id]['title']}' dihentikan otomatis."
                             )
 
             # Peringatan kapasitas disk (cegah disk penuh)
@@ -762,6 +871,14 @@ def start_stream():
         video = next((v for v in uploaded_videos if v['filename'] == video_filename), None)
         if not video:
             return jsonify({'message': 'Video not found'}), 404
+
+        # Validasi codec: stream pakai `-c copy` ke FLV/RTMP, jadi video harus
+        # H.264 + AAC/MP3. Codec lain membuat ffmpeg mati terus (restart loop).
+        ok_codec, codec_error = probe_video_compatibility(
+            os.path.join(uploads_dir, video['filename'])
+        )
+        if not ok_codec:
+            return jsonify({'message': codec_error}), 400
 
         # Cek jumlah stream aktif
         active_streams = sum(1 for info in live_info.values() if info['status'] == 'Active')

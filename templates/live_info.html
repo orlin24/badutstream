@@ -159,6 +159,8 @@
               </div>` : ""}
             </div>
 
+            <div id="lastErrorBox" class="alert alert-danger py-2 px-3 mt-3 mb-0 small d-none text-break"></div>
+
             <hr class="my-4" />
 
             ${
@@ -357,6 +359,12 @@
           data.status
         )}`;
         statusBadge.textContent = data.status;
+      }
+      const errBox = document.getElementById("lastErrorBox");
+      if (errBox) {
+        // textContent agar isi log ffmpeg dirender aman (anti-XSS)
+        errBox.textContent = data.last_error || "";
+        errBox.classList.toggle("d-none", !data.last_error);
       }
     } catch (error) {
       console.error("Error updating status:", error);
