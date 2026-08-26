@@ -491,6 +491,7 @@ def run_ffmpeg_with_nice(live_id, info):
             "-thread_queue_size", "2048",
             "-stream_loop", "-1", "-re", "-i", file_path,
             "-b:v", bitrate, "-bufsize", bufsize, "-maxrate", maxrate,
+            "-rtmp_live", "live",
             "-f", "flv", "-c:v", "copy", "-c:a", "copy",
             "-flvflags", "no_duration_filesize",
             f"rtmp://a.rtmp.youtube.com/live2/{stream_key}"
