@@ -700,6 +700,31 @@ def stop_all_active_streams():
         if info['status'] == 'Active':
             stop_stream_manually(live_id, force=True)
 
+def restore_auto_start_streams(auto_ids):
+    """Auto-start stream yang tadinya Active saat app startup.
+    Dipanggil setelah stop_all_active_streams + kill_orphaned_ffmpeg.
+    Tunggu ffmpeg teregistrasi agar watchdog tidak memicu restart duplikat."""
+    for live_id in auto_ids:
+        info = live_info.get(live_id)
+        if not info:
+            continue
+        video_name = info.get('video', '')
+        if not video_name or not os.path.exists(os.path.join(uploads_dir, video_name)):
+            logging.warning(f"Auto-start dilewati: video hilang untuk '{info.get('title', live_id)}'")
+            continue
+        if not info.get('streamKey'):
+            logging.warning(f"Auto-start dilewati: streamKey kosong untuk '{info.get('title', live_id)}'")
+            continue
+        logging.info(f"Auto-start stream '{info.get('title', live_id)}' (id={live_id}) saat startup")
+        run_ffmpeg(live_id, dict(info))
+        # Tunggu ffmpeg teregistrasi (max ~5 dtk) supaya watchdog tidak
+        # menganggap stream mati dan memicu restart duplikat.
+        for _ in range(50):
+            p = processes.get(live_id)
+            if p and p.poll() is None:
+                break
+            time.sleep(0.1)
+
 def periodic_check():
     check_and_update_scheduled_streams()
     threading.Timer(60, periodic_check).start()
@@ -1404,12 +1429,17 @@ def format_size(size):
         
     return f"{size:.1f} {units[unit_index]}"
 
+# Snapshot stream yang sedang aktif sebelum dihentikan, untuk auto-start
+auto_start_ids = [lid for lid, i in live_info.items() if i.get('status') == 'Active']
 # Pastikan semua streaming aktif ditandai sebagai stopped saat startup
 stop_all_active_streams()
 # Bunuh ffmpeg zombie yang tertinggal dari server lama (restart saat stream live)
 kill_orphaned_ffmpeg()
 # Bersihkan file log ffmpeg milik stream yang sudah tidak ada
 cleanup_stale_logs()
+
+# Hidupkan ulang stream yang tadi aktif (auto-start setelah restart service)
+restore_auto_start_streams(auto_start_ids)
 
 # Mulai pengecekan berkala untuk streaming terjadwal
 periodic_check()
