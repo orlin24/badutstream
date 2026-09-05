@@ -202,30 +202,77 @@ def _delayed_restart(live_id):
     if not info or info.get('status') != 'Active':
         logging.info(f"Restart stream {live_id} dibatalkan (status bukan Active).")
         return
+    # Reset flag stop eksplisit: restart sukses berarti user tidak lagi
+    # dalam mode 'stop', jadi kalau mati lagi, watchdog boleh auto-restart.
+    info.pop('stopped_explicitly', None)
     logging.info(f"Menjalankan ulang stream {live_id}...")
     threading.Thread(target=run_ffmpeg_with_nice, args=[live_id, dict(info)], daemon=True).start()
 
 
+def reconcile_live_status(live_id, info, process):
+    """Sinkronkan status live_id berdasarkan proses ffmpeg yang sebenarnya.
+
+    Dipakai watchdog (tiap 10 detik) dan endpoint /reconcile_streams.
+    Return True kalau status berubah dari Active ke Stopped.
+    """
+    if not info or info.get('status') != 'Active':
+        return False
+    # Proses ada dan masih hidup: tidak ada yang perlu di-reconcile.
+    if process is not None and process.poll() is None:
+        return False
+    # Proses sudah mati atau hilang dari registry. Catat penyebab, set Stopped,
+    # JANGAN jadwalkan restart - biarkan user klik Start manual. Ini mencegah
+    # UI nyangkut di "Active" ketika ffmpeg sudah mati tapi watchdog gagal restart
+    # (mis. restart_limit tercapai, atau stream di-stop permanen dari YouTube).
+    record_stream_failure(live_id, process)
+    info['status'] = 'Stopped'
+    save_live_info()
+    logging.warning(
+        f"Stream {live_id} di-reconcile ke Stopped "
+        f"(proses={'missing' if process is None else 'dead'})."
+    )
+    return True
+
+
 def restart_if_needed():
+    # Watchdog thread ini HARUS TIDAK PERNAH mati, kalau tidak stream 24/7
+    # akan stuck jika satu exception muncul di loop. Wrap seluruh body
+    # dengan try/except + log, lanjut ke siklus berikutnya.
     while True:
-        with process_lock:
-            live_ids = list(processes.keys())
-            for live_id in list(live_info.keys()):
-                info = live_info.get(live_id)
-                if not info or info.get('status') != 'Active':
-                    continue
-                if live_id in pending_restarts:
-                    continue
-                process = processes.get(live_id)
-                if process and process.poll() is not None:  # Proses sudah mati
-                    del processes[live_id]
-                    record_stream_failure(live_id, process)
-                    logging.warning(f"Stream {live_id} mati tidak wajar, dijadwalkan restart...")
-                    _restart_stream_with_limit(live_id, info)
-                elif live_id not in processes:
-                    # Proses hilang dari dictionary (mis. crash), restart otomatis
-                    logging.warning(f"Tidak ada proses untuk live_id: {live_id}, restart dijadwalkan.")
-                    _restart_stream_with_limit(live_id, info)
+        try:
+            with process_lock:
+                for live_id in list(live_info.keys()):
+                    info = live_info.get(live_id)
+                    if not info or info.get('status') != 'Active':
+                        continue
+                    if live_id in pending_restarts:
+                        continue
+                    process = processes.get(live_id)
+                    # Kalau user/scheduler sudah stop eksplisit, hormati: hanya
+                    # reconcile ke Stopped, jangan auto-restart.
+                    if info.get('stopped_explicitly'):
+                        if process and process.poll() is not None:
+                            processes.pop(live_id, None)
+                        reconcile_live_status(live_id, info, None)
+                        continue
+                    if process and process.poll() is not None:  # Proses sudah mati
+                        del processes[live_id]
+                        record_stream_failure(live_id, process)
+                        logging.warning(f"Stream {live_id} mati tidak wajar, dijadwalkan restart...")
+                        _restart_stream_with_limit(live_id, info)
+                    elif live_id not in processes:
+                        # Proses hilang dari dictionary: cek apakah user benar-benar
+                        # mau auto-restart, atau cukup di-reconcile ke Stopped.
+                        # Stream yang sebelumnya gagal restart dalam window ini
+                        # (restart_count > 0) sudah menyerah - reconcile saja.
+                        if info.get('restart_count', 0) > 0:
+                            reconcile_live_status(live_id, info, None)
+                        else:
+                            logging.warning(f"Tidak ada proses untuk live_id: {live_id}, restart dijadwalkan.")
+                            _restart_stream_with_limit(live_id, info)
+        except Exception as e:
+            # Apapun yang terjadi, log dan lanjut. Jangan biarkan watchdog mati.
+            logging.error(f"Watchdog error (non-fatal): {e}", exc_info=True)
         # Cek setiap 10 detik untuk memastikan restart cepat
         time.sleep(10)
 
@@ -312,23 +359,37 @@ def kill_orphaned_ffmpeg():
 
 
 def cleanup_stale_logs():
-    """Hapus file log ffmpeg milik stream yang sudah tidak ada."""
+    """Hapus file log ffmpeg yang sudah tidak relevan.
+
+    Dua kasus:
+    1. Log milik live_id yang sudah dihapus dari live_info.
+    2. Log kosong (0 byte) untuk stream ber-status Stopped - hanya noise
+       yang memenuhi direktori, tidak ada informasi diagnostik.
+    """
     removed = 0
     try:
         for name in os.listdir(uploads_dir):
             if not (name.startswith('ffmpeg_') and name.endswith('.log')):
                 continue
             live_id = name[len('ffmpeg_'):-len('.log')]
-            if live_id not in live_info:
-                try:
-                    os.remove(os.path.join(uploads_dir, name))
-                    removed += 1
-                except OSError:
-                    pass
+            path = os.path.join(uploads_dir, name)
+            orphan = live_id not in live_info
+            empty_stopped = (
+                live_id in live_info
+                and live_info[live_id].get('status') != 'Active'
+                and os.path.getsize(path) == 0
+            )
+            if not (orphan or empty_stopped):
+                continue
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
     except OSError:
         pass
     if removed:
-        logging.info(f"{removed} file log ffmpeg lama dibersihkan saat startup.")
+        logging.info(f"{removed} file log ffmpeg lama/kosong dibersihkan.")
 
 
 def cap_log_sizes(max_bytes=5 * 1024 * 1024):
@@ -484,11 +545,21 @@ def run_ffmpeg_with_nice(live_id, info):
         else:
             base_command = [FFMPEG_PATH]
         
-        # Bangun perintah FFmpeg
+        # Bangun perintah FFmpeg.
+        # Flag reconnect membuat ffmpeg self-heal untuk drop kecil (<= 30 detik)
+        # tanpa exit total - krusial untuk 24/7 karena ISP blip atau YouTube
+        # ingest hiccup tidak akan mematikan stream. Untuk drop lebih besar
+        # (key rotation, server down lama), ffmpeg tetap exit dan watchdog
+        # restart prosesnya.
         ffmpeg_args = [
             "-loglevel", "warning",
             "-nostdin",
             "-thread_queue_size", "2048",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "30",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_on_http_error", "1",
             "-stream_loop", "-1", "-re", "-i", file_path,
             "-b:v", bitrate, "-bufsize", bufsize, "-maxrate", maxrate,
             "-rtmp_live", "live",
@@ -604,6 +675,14 @@ def stop_stream_manually(live_id, is_scheduled=False, force=False):
         if live_id in live_info:
             live_info[live_id]['status'] = 'Stopped'
             live_info[live_id].pop('last_error', None)  # stop manual: bersihkan error lama
+            # Tandai sumber stop: kalau scheduler (duration habis) atau user
+            # manual, watchdog TIDAK boleh restart otomatis. Bedanya dengan
+            # 'mati sendiri' (proses exit sendiri) adalah di sini ada
+            # permintaan eksplisit dari user/scheduler.
+            if is_scheduled or force:
+                live_info[live_id]['stopped_explicitly'] = True
+            else:
+                live_info[live_id].pop('stopped_explicitly', None)
             save_live_info()
 
     if process and process.poll() is None:
@@ -878,6 +957,54 @@ def download_from_google_drive(file_url, output_path):
 def index():
     return render_template('index.html', title='Home', videos=uploaded_videos)
 
+
+@app.route('/healthz')
+def healthz():
+    """Endpoint health untuk monitor eksternal & systemd watchdog.
+
+    Return 200 kalau watchdog thread hidup dan proses ffmpeg yang seharusnya
+    Active benar-benar ada. Jangan pakai @login_required - systemd curl
+    /healthz tanpa cookie, dan monitor eksternal seperti UptimeRobot juga
+    butuh akses publik.
+
+    Balasan JSON ringan agar mudah di-parse.
+    """
+    watchdog_alive = False
+    ffmpeg_alive = True  # default True, jadi kalau watchdog down pun /healthz tetap 200
+    ffmpeg_status = []
+    try:
+        watchdog_alive = watchdog_thread.is_alive() if 'watchdog_thread' in globals() else True
+        with process_lock:
+            for live_id, info in live_info.items():
+                if info.get('status') != 'Active':
+                    continue
+                process = processes.get(live_id)
+                alive = process is not None and process.poll() is None
+                ffmpeg_status.append({
+                    'id': live_id[:8],
+                    'title': info.get('title', '')[:30],
+                    'ffmpeg_alive': alive,
+                })
+                if not alive:
+                    ffmpeg_alive = False
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+    body = {
+        'status': 'ok' if watchdog_alive and ffmpeg_alive else 'degraded',
+        'watchdog_alive': watchdog_alive,
+        'ffmpeg_alive': ffmpeg_alive,
+        'streams': ffmpeg_status,
+        'uptime_sessions': sum(
+            1 for s in ffmpeg_status if s['ffmpeg_alive']
+        ),
+    }
+    # systemd watchdog: kirim sd_notify-style WATCHDOG=1 kalau ada.
+    # Karena kita pakai plain Flask (bukan sd_notify), cukup return 200 cepat
+    # agar systemd WatchdogSec timer tidak kill service.
+    return jsonify(body), (200 if body['status'] == 'ok' else 503)
+
+
 @app.route('/start_stream', methods=['POST'])
 @login_required
 def start_stream():
@@ -975,6 +1102,34 @@ def start_stream():
     except Exception as e:
         logging.error(f"Error: {str(e)}")
         return jsonify({'message': str(e)}), 500
+
+@app.route('/reconcile_streams', methods=['POST'])
+@login_required
+def reconcile_streams():
+    """Sinkronkan status stream dengan proses ffmpeg yang sebenarnya.
+
+    Berguna saat UI menampilkan "Active" padahal ffmpeg sudah mati (mis.
+    stream di-stop dari YouTube Studio, ingest server putus, dsb). Endpoint
+    ini idempoten dan aman dipanggil berkali-kali.
+    """
+    changed = []
+    try:
+        with process_lock:
+            for live_id, info in list(live_info.items()):
+                process = processes.get(live_id)
+                if reconcile_live_status(live_id, info, process):
+                    changed.append(live_id)
+        # Bersihkan log kosong di luar lock - tidak ganggu watchdog.
+        cleanup_stale_logs()
+        return jsonify({
+            'message': 'Reconcile selesai',
+            'changed': changed,
+            'count': len(changed),
+        })
+    except Exception as e:
+        logging.error(f"Reconcile error: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+
 
 @app.route('/stop_stream/<id>', methods=['POST'])
 @login_required
